@@ -1,5 +1,7 @@
 const express = require('express');
 const http = require('http');
+const path = require('path');
+const fs = require('fs');
 const { Server } = require('socket.io');
 const { createGameState: createUnoState, playCard, drawCard } = require('./games/uno');
 const { createGameState: createCahState, submitResponse, czarPick, nextRound, addCustomCard } = require('./games/cah');
@@ -8,6 +10,8 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: '*', methods: ['GET', 'POST'] },
+  // Allow both transports for maximum client compatibility
+  transports: ['polling', 'websocket'],
 });
 
 const rooms = {};
@@ -294,5 +298,23 @@ io.on('connection', socket => {
   });
 });
 
+// Serve the built React client so a single port handles everything
+// (works for Render, Railway, ngrok, and any other hosting)
+const clientDist = path.join(__dirname, '../client/dist');
+if (fs.existsSync(clientDist)) {
+  app.use(express.static(clientDist));
+  // SPA fallback — let React Router handle unknown paths
+  app.get('*', (req, res) => {
+    res.sendFile(path.join(clientDist, 'index.html'));
+  });
+}
+
 const PORT = process.env.PORT || 3001;
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(PORT, '0.0.0.0', () => {
+  console.log(`Server running on port ${PORT}`);
+  if (fs.existsSync(clientDist)) {
+    console.log('Serving built client from', clientDist);
+  } else {
+    console.log('No client build found — API/socket only mode');
+  }
+});
