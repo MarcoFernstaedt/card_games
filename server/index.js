@@ -235,12 +235,60 @@ io.on('connection', socket => {
       if (idx === -1) continue;
 
       const playerName = room.players[idx].name;
+      const leavingId = socket.id;
       room.players.splice(idx, 1);
 
       if (room.players.length === 0) { delete rooms[code]; continue; }
-      if (room.host === socket.id) room.host = room.players[0].id;
+      if (room.host === leavingId) room.host = room.players[0].id;
 
-      io.to(code).emit('player_left', { playerId: socket.id, playerName });
+      // Repair active game state after player leaves
+      if (room.gameState) {
+        const gs = room.gameState;
+        delete gs.hands[leavingId];
+
+        if (room.gameType === 'uno') {
+          // Adjust currentPlayerIndex so the correct player still has the turn
+          if (idx < gs.currentPlayerIndex) {
+            gs.currentPlayerIndex = gs.currentPlayerIndex - 1;
+          } else if (idx === gs.currentPlayerIndex) {
+            gs.currentPlayerIndex = gs.currentPlayerIndex % room.players.length;
+          }
+        }
+
+        if (room.gameType === 'cah') {
+          delete gs.submissions[leavingId];
+
+          // Adjust czarIndex to track the same person (or pick next if czar left)
+          if (idx < gs.czarIndex) {
+            gs.czarIndex = gs.czarIndex - 1;
+          } else if (idx === gs.czarIndex) {
+            gs.czarIndex = gs.czarIndex % room.players.length;
+          }
+
+          // After removing player, check if remaining non-czar players have all submitted
+          if (gs.phase === 'playing' && room.players.length > 1) {
+            const czarId = room.players[gs.czarIndex]?.id;
+            const nonCzar = room.players.filter(p => p.id !== czarId);
+            if (nonCzar.length > 0 && nonCzar.every(p => gs.submissions[p.id])) {
+              gs.phase = 'judging';
+            }
+          }
+        }
+
+        // If fewer than 2 players remain, the game cannot continue
+        if (room.players.length < 2) {
+          io.to(code).emit('player_left', { playerId: leavingId, playerName });
+          io.to(code).emit('game_over', {
+            message: 'Not enough players',
+            scores: gs.scores || {},
+            winnerName: null,
+          });
+          room.gameState = null;
+          continue;
+        }
+      }
+
+      io.to(code).emit('player_left', { playerId: leavingId, playerName });
       io.to(code).emit('game_state', getPublicState(room));
     }
   });

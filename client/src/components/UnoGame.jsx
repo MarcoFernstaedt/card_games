@@ -114,6 +114,17 @@ export default function UnoGame({ gameState, hand, playerId, roomCode }) {
     <div className="uno-game">
       {pendingWild && <ColorPicker onPick={handleColorPick} />}
 
+      {/* Identity bar */}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 14px', background: 'var(--surface)', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'linear-gradient(135deg, var(--accent), var(--accent2))', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '0.78rem' }}>
+            {myInfo?.name?.charAt(0).toUpperCase() || '?'}
+          </div>
+          <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>{myInfo?.name || 'You'}</span>
+        </div>
+        <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>Room: <strong style={{ color: 'var(--accent)', letterSpacing: 2 }}>{roomCode}</strong></span>
+      </div>
+
       {/* Other players */}
       <div className="uno-players-bar">
         {otherPlayers.map(p => (

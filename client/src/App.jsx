@@ -79,7 +79,7 @@ export default function App() {
             <>
               <h1>Game Over!</h1>
               <div className="score-list">
-                {gameState?.players?.sort((a, b) => (gameOver.scores[b.id] || 0) - (gameOver.scores[a.id] || 0)).map(p => (
+                {[...(gameState?.players || [])].sort((a, b) => (gameOver.scores[b.id] || 0) - (gameOver.scores[a.id] || 0)).map(p => (
                   <div key={p.id} className="score-row">
                     <span>{p.name}</span>
                     <span className="score-pts">{gameOver.scores[p.id] || 0} pts</span>

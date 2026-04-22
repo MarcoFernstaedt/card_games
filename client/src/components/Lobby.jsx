@@ -73,8 +73,10 @@ export default function Lobby({ gameState, roomCode, playerId, playerName, setPl
             {gameState.players?.map(p => (
               <div key={p.id} className="player-chip">
                 <div className="avatar">{p.name.charAt(0).toUpperCase()}</div>
-                <span>{p.name}</span>
-                {p.id === gameState.host && <span className="host-badge">HOST</span>}
+                <span style={{ fontWeight: p.id === playerId ? 700 : 400 }}>{p.name}</span>
+                {p.id === gameState.host && (
+                  <span className="host-badge">{p.id === playerId ? 'HOST (YOU)' : 'HOST'}</span>
+                )}
                 {p.id === playerId && p.id !== gameState.host && (
                   <span className="host-badge" style={{ background: 'rgba(233,69,96,0.15)', color: 'var(--accent2)' }}>YOU</span>
                 )}

@@ -80,11 +80,17 @@ export default function CahGame({ gameState, hand, playerId, roomCode }) {
     <div className="cah-game">
       {/* Header */}
       <div className="cah-header">
-        <h2>Wild Cards</h2>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <h2>Wild Cards</h2>
+          <span style={{ fontSize: '0.72rem', color: 'var(--muted)' }}>
+            Playing as <strong style={{ color: 'var(--accent)' }}>{gameState.players?.find(p => p.id === playerId)?.name || 'You'}</strong>
+            &nbsp;· Room <strong style={{ color: 'var(--accent)', letterSpacing: 1 }}>{roomCode}</strong>
+          </span>
+        </div>
         <div className="cah-scores">
           {gameState.players?.slice(0, 4).map(p => (
-            <div key={p.id} className="score-badge">
-              <span>{p.name.charAt(0)}</span>
+            <div key={p.id} className="score-badge" title={p.name} style={p.id === playerId ? { borderColor: 'var(--accent)', border: '1px solid' } : {}}>
+              <span style={{ maxWidth: 40, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{p.name.split(' ')[0]}</span>
               <span className="pts">{p.score}</span>
             </div>
           ))}
