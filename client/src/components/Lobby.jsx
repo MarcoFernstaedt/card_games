@@ -1,9 +1,14 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import socket from '../socket';
 
-export default function Lobby({ gameState, roomCode, playerId, playerName, setPlayerName }) {
+export default function Lobby({ gameState, roomCode, playerId, playerName, setPlayerName, musicEnabled, setMusicEnabled, musicTrack, setMusicTrack, musicVolume, setMusicVolume, musicTracks, onLeaveRoom }) {
   const [view, setView] = useState('home'); // home | create | join
   const [joinCode, setJoinCode] = useState('');
+
+  useEffect(() => {
+    if (roomCode) return;
+    setView('home');
+  }, [roomCode]);
 
   const isHost = gameState?.host === playerId;
   const inRoom = !!roomCode;
@@ -98,6 +103,26 @@ export default function Lobby({ gameState, roomCode, playerId, playerName, setPl
               Waiting for host to start...
             </div>
           )}
+
+          <button className="btn-secondary" onClick={onLeaveRoom}>
+            Leave Room
+          </button>
+        </div>
+
+        <div className="music-panel">
+          <div className="music-panel-title">Music</div>
+          <label className="music-toggle-row">
+            <input type="checkbox" checked={musicEnabled} onChange={e => setMusicEnabled(e.target.checked)} />
+            <span>{musicEnabled ? 'Music on' : 'Music off'}</span>
+          </label>
+          <select className="input-field" value={musicTrack} onChange={e => setMusicTrack(e.target.value)}>
+            {musicTracks.map(track => (
+              <option key={track.id} value={track.id}>{track.label}</option>
+            ))}
+          </select>
+          <label className="slider-label">Volume: {Math.round(musicVolume * 100)}%</label>
+          <input className="volume-slider" type="range" min="0" max="1" step="0.05" value={musicVolume} onChange={e => setMusicVolume(Number(e.target.value))} />
+          <div className="music-help">Music stays with this device after refresh.</div>
         </div>
       </div>
     );
@@ -145,6 +170,21 @@ export default function Lobby({ gameState, roomCode, playerId, playerName, setPl
                 Enter your name to continue
               </p>
             )}
+
+            <div className="music-panel compact">
+              <div className="music-panel-title">Music</div>
+              <label className="music-toggle-row">
+                <input type="checkbox" checked={musicEnabled} onChange={e => setMusicEnabled(e.target.checked)} />
+                <span>{musicEnabled ? 'Music on' : 'Music off'}</span>
+              </label>
+              <select className="input-field" value={musicTrack} onChange={e => setMusicTrack(e.target.value)}>
+                {musicTracks.map(track => (
+                  <option key={track.id} value={track.id}>{track.label}</option>
+                ))}
+              </select>
+              <label className="slider-label">Volume: {Math.round(musicVolume * 100)}%</label>
+              <input className="volume-slider" type="range" min="0" max="1" step="0.05" value={musicVolume} onChange={e => setMusicVolume(Number(e.target.value))} />
+            </div>
           </>
         )}
 
