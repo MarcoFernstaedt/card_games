@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import socket from '../socket';
 import CreateCard from './CreateCard';
+import MusicControls from './MusicControls';
+import Confetti from './Confetti';
 
 function BlackCard({ card }) {
   if (!card) return null;
@@ -37,11 +39,10 @@ function WhiteCard({ card, selected, onClick, winner }) {
   );
 }
 
-export default function CahGame({ gameState, hand, playerId, roomCode }) {
+export default function CahGame({ gameState, hand, playerId, roomCode, musicState, isHost }) {
   const [selected, setSelected] = useState([]);
   const [showCreateCard, setShowCreateCard] = useState(false);
 
-  const isHost = gameState.host === playerId;
   const isCzar = gameState.czarId === playerId;
   const myScore = gameState.scores?.[playerId] || 0;
   const myCustomCount = gameState.customCardCounts?.[playerId] || 0;
@@ -78,6 +79,8 @@ export default function CahGame({ gameState, hand, playerId, roomCode }) {
 
   return (
     <div className="cah-game">
+      <Confetti active={gameState.phase === 'results'} />
+      <MusicControls roomCode={roomCode} isHost={isHost} musicState={musicState} />
       {/* Header */}
       <div className="cah-header">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>

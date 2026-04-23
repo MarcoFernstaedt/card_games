@@ -1,21 +1,29 @@
-import { useState } from 'react';
-import socket from '../socket';
+import { useState, useEffect } from 'react';
+import socket, { pid } from '../socket';
+import MusicControls from './MusicControls';
 
-export default function Lobby({ gameState, roomCode, playerId, playerName, setPlayerName }) {
-  const [view, setView] = useState('home'); // home | create | join
+export default function Lobby({ gameState, roomCode, playerId, playerName, setPlayerName, musicState, isHost }) {
+  const [view, setView] = useState('home');
   const [joinCode, setJoinCode] = useState('');
+  const [savedSession, setSavedSession] = useState(null);
 
-  const isHost = gameState?.host === playerId;
+  useEffect(() => {
+    try {
+      const s = JSON.parse(localStorage.getItem('cg_session'));
+      if (s?.roomCode && s?.pid === pid && !roomCode) setSavedSession(s);
+    } catch {}
+  }, [roomCode]);
+
   const inRoom = !!roomCode;
 
   function handleCreate() {
     if (!playerName.trim()) return;
-    socket.emit('create_room', { name: playerName.trim(), gameType: 'cah' });
+    socket.emit('create_room', { name: playerName.trim(), gameType: 'cah', pid });
   }
 
   function handleJoin() {
     if (!playerName.trim() || !joinCode.trim()) return;
-    socket.emit('join_room', { name: playerName.trim(), code: joinCode.trim().toUpperCase() });
+    socket.emit('join_room', { name: playerName.trim(), code: joinCode.trim().toUpperCase(), pid });
   }
 
   function handleStart() {
@@ -24,6 +32,17 @@ export default function Lobby({ gameState, roomCode, playerId, playerName, setPl
 
   function handleGameTypeChange(type) {
     socket.emit('change_game_type', { code: roomCode, gameType: type });
+  }
+
+  function handleRejoin() {
+    if (!savedSession) return;
+    socket.emit('rejoin_room', { code: savedSession.roomCode, pid });
+    setSavedSession(null);
+  }
+
+  function handleDismissRejoin() {
+    localStorage.removeItem('cg_session');
+    setSavedSession(null);
   }
 
   if (inRoom && gameState) {
@@ -71,9 +90,10 @@ export default function Lobby({ gameState, roomCode, playerId, playerName, setPl
           <div className="player-list">
             <div className="player-list-title">Players ({gameState.players?.length}/6)</div>
             {gameState.players?.map(p => (
-              <div key={p.id} className="player-chip">
+              <div key={p.id} className={`player-chip ${p.disconnected ? 'disconnected' : ''}`}>
                 <div className="avatar">{p.name.charAt(0).toUpperCase()}</div>
                 <span style={{ fontWeight: p.id === playerId ? 700 : 400 }}>{p.name}</span>
+                {p.disconnected && <span style={{ fontSize: '0.7rem', color: 'var(--muted)', marginLeft: 4 }}>⏳</span>}
                 {p.id === gameState.host && (
                   <span className="host-badge">{p.id === playerId ? 'HOST (YOU)' : 'HOST'}</span>
                 )}
@@ -99,6 +119,8 @@ export default function Lobby({ gameState, roomCode, playerId, playerName, setPl
             </div>
           )}
         </div>
+
+        {roomCode && <MusicControls roomCode={roomCode} isHost={isHost} musicState={musicState} />}
       </div>
     );
   }
@@ -109,6 +131,16 @@ export default function Lobby({ gameState, roomCode, playerId, playerName, setPl
         <h1>Card Games</h1>
         <p>Wild Cards & UNO — up to 6 players</p>
       </div>
+
+      {savedSession && (
+        <div className="rejoin-banner">
+          <span>Rejoin room <strong>{savedSession.roomCode}</strong> as <strong>{savedSession.name}</strong>?</span>
+          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+            <button className="btn-sm" onClick={handleRejoin}>Rejoin</button>
+            <button className="btn-sm" style={{ background: 'var(--surface2)', color: 'var(--muted)' }} onClick={handleDismissRejoin}>Dismiss</button>
+          </div>
+        </div>
+      )}
 
       <div className="lobby-card">
         {view === 'home' && (

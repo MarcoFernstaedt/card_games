@@ -1,6 +1,10 @@
 import { io } from 'socket.io-client';
 
-// Start with polling for maximum cross-device/proxy compatibility, then upgrade to WebSocket
-const socket = io({ transports: ['polling', 'websocket'] });
+function getPid() {
+  let id = localStorage.getItem('cg_pid');
+  if (!id) { id = crypto.randomUUID(); localStorage.setItem('cg_pid', id); }
+  return id;
+}
 
-export default socket;
+export const pid = getPid();
+export default io({ transports: ['polling', 'websocket'] });
