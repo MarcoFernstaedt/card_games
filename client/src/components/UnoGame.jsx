@@ -1,5 +1,7 @@
 import { useState } from 'react';
 import socket from '../socket';
+import MusicControls from './MusicControls';
+import Confetti from './Confetti';
 
 const VALUE_DISPLAY = {
   skip: '⊘',
@@ -66,8 +68,8 @@ function ColorPicker({ onPick }) {
   );
 }
 
-export default function UnoGame({ gameState, hand, playerId, roomCode }) {
-  const [pendingWild, setPendingWild] = useState(null); // { cardIndex }
+export default function UnoGame({ gameState, hand, playerId, roomCode, musicState, isHost }) {
+  const [pendingWild, setPendingWild] = useState(null);
 
   const myPlayerIndex = gameState.players?.findIndex(p => p.id === playerId);
   const isMyTurn = gameState.currentPlayerIndex === myPlayerIndex;
@@ -110,8 +112,11 @@ export default function UnoGame({ gameState, hand, playerId, roomCode }) {
   const otherPlayers = gameState.players?.filter(p => p.id !== playerId) || [];
   const myInfo = gameState.players?.find(p => p.id === playerId);
 
+  const winner = gameState.winner;
+
   return (
     <div className="uno-game">
+      <Confetti active={!!winner} />
       {pendingWild && <ColorPicker onPick={handleColorPick} />}
 
       {/* Identity bar */}
@@ -188,8 +193,10 @@ export default function UnoGame({ gameState, hand, playerId, roomCode }) {
         )}
       </div>
 
+      <MusicControls roomCode={roomCode} isHost={isHost} musicState={musicState} />
+
       {/* Hand */}
-      <div className="uno-hand">
+      <div className="uno-hand" style={{ paddingBottom: 68 }}>
         <div className="uno-hand-label">Your Hand {!isMyTurn && '(not your turn)'}</div>
         <div className="hand-scroll">
           {hand.map((card, idx) => (

@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react';
-import socket from './socket';
+import socket, { pid } from './socket';
 import Lobby from './components/Lobby';
 import UnoGame from './components/UnoGame';
 import CahGame from './components/CahGame';
+import Confetti from './components/Confetti';
+import Particles from './components/Particles';
 
 const STORAGE_KEY = 'card_games_session';
 const MUSIC_TRACKS = [
@@ -44,6 +46,8 @@ export default function App() {
   const [musicEnabled, setMusicEnabled] = useState(saved?.musicEnabled ?? false);
   const [musicTrack, setMusicTrack] = useState(saved?.musicTrack ?? MUSIC_TRACKS[0].id);
   const [musicVolume, setMusicVolume] = useState(saved?.musicVolume ?? 0.35);
+  const [musicState, setMusicState] = useState(null);
+  const [showConfetti, setShowConfetti] = useState(false);
 
   useEffect(() => {
     const current = {
@@ -73,15 +77,33 @@ export default function App() {
     };
   }, [musicEnabled, musicTrack, musicVolume]);
 
+  function showToast(msg) {
+    setError(msg);
+    setTimeout(() => setError(null), 3500);
+  }
+
+  // Attempt to rejoin saved session on connect
   useEffect(() => {
-    socket.on('room_created', ({ code, playerId: pid }) => {
+    function tryRejoin() {
+      const saved = (() => {
+        try { return JSON.parse(localStorage.getItem('cg_session')); } catch { return null; }
+      })();
+      if (saved?.roomCode && saved?.pid === pid) {
+        socket.emit('rejoin_room', { code: saved.roomCode, pid });
+        setPlayerName(saved.name || '');
+      }
+    }
+
+    socket.on('connect', tryRejoin);
+
+    socket.on('room_created', ({ code, playerId: pId }) => {
       setRoomCode(code);
-      setPlayerId(pid);
+      setPlayerId(pId);
     });
 
-    socket.on('room_joined', ({ code, playerId: pid }) => {
+    socket.on('room_joined', ({ code, playerId: pId }) => {
       setRoomCode(code);
-      setPlayerId(pid);
+      setPlayerId(pId);
     });
 
     socket.on('game_state', state => {
@@ -93,25 +115,38 @@ export default function App() {
     });
 
     socket.on('error', ({ message }) => {
-      setError(message);
-      setTimeout(() => setError(null), 3500);
+      showToast(message);
     });
 
     socket.on('game_over', data => {
       setGameOver(data);
+      setShowConfetti(true);
+      setTimeout(() => setShowConfetti(false), 4000);
+      localStorage.removeItem('cg_session');
     });
 
     socket.on('player_left', ({ playerName: name }) => {
-      setError(`${name} left the game`);
-      setTimeout(() => setError(null), 3500);
+      showToast(`${name} left the game`);
+    });
+
+    socket.on('player_disconnected', ({ playerName: name }) => {
+      showToast(`${name} disconnected (30s to rejoin...)`);
+    });
+
+    socket.on('player_rejoined', ({ playerName: name }) => {
+      showToast(`${name} reconnected!`);
     });
 
     socket.on('custom_card_added', ({ creatorName }) => {
-      setError(`✨ ${creatorName} added a custom card to the deck!`);
-      setTimeout(() => setError(null), 3500);
+      showToast(`✨ ${creatorName} added a custom card to the deck!`);
+    });
+
+    socket.on('music_state', state => {
+      setMusicState(state);
     });
 
     return () => {
+      socket.off('connect');
       socket.off('room_created');
       socket.off('room_joined');
       socket.off('game_state');
@@ -119,11 +154,23 @@ export default function App() {
       socket.off('error');
       socket.off('game_over');
       socket.off('player_left');
+      socket.off('player_disconnected');
+      socket.off('player_rejoined');
       socket.off('custom_card_added');
+      socket.off('music_state');
     };
   }, []);
 
+  // Save session to localStorage whenever we're in a room
+  useEffect(() => {
+    if (roomCode && playerId && playerName) {
+      localStorage.setItem('cg_session', JSON.stringify({ roomCode, pid, name: playerName }));
+    }
+  }, [roomCode, playerId, playerName]);
+
   const isInGame = gameState && gameState.phase !== 'lobby';
+  const isHost = gameState?.host === playerId;
+  const particleMode = gameOver ? 'victory' : isInGame ? 'playing' : 'lobby';
 
   function resetSession() {
     setGameOver(null);
@@ -137,7 +184,9 @@ export default function App() {
   if (gameOver) {
     return (
       <div className="game-over-screen">
-        <div className="game-over-card">
+        <Particles mode="victory" />
+        <Confetti active={showConfetti} />
+        <div className="game-over-card" style={{ position: 'relative', zIndex: 1 }}>
           <div className="game-over-icon">🏆</div>
           {gameOver.winnerName ? (
             <>
@@ -167,38 +216,47 @@ export default function App() {
 
   return (
     <div className="app">
+      <Particles mode={particleMode} />
       {error && <div className="error-toast">{error}</div>}
-      {!isInGame ? (
-        <Lobby
-          gameState={gameState}
-          roomCode={roomCode}
-          playerId={playerId}
-          playerName={playerName}
-          setPlayerName={setPlayerName}
-          musicEnabled={musicEnabled}
-          setMusicEnabled={setMusicEnabled}
-          musicTrack={musicTrack}
-          setMusicTrack={setMusicTrack}
-          musicVolume={musicVolume}
-          setMusicVolume={setMusicVolume}
-          musicTracks={MUSIC_TRACKS}
-          onLeaveRoom={resetSession}
-        />
-      ) : gameState.gameType === 'uno' ? (
-        <UnoGame
-          gameState={gameState}
-          hand={hand}
-          playerId={playerId}
-          roomCode={roomCode}
-        />
-      ) : (
-        <CahGame
-          gameState={gameState}
-          hand={hand}
-          playerId={playerId}
-          roomCode={roomCode}
-        />
-      )}
+      <div style={{ position: 'relative', zIndex: 1, display: 'flex', flexDirection: 'column', minHeight: '100dvh' }}>
+        {!isInGame ? (
+          <Lobby
+            gameState={gameState}
+            roomCode={roomCode}
+            playerId={playerId}
+            playerName={playerName}
+            setPlayerName={setPlayerName}
+            musicState={musicState}
+            isHost={isHost}
+            musicEnabled={musicEnabled}
+            setMusicEnabled={setMusicEnabled}
+            musicTrack={musicTrack}
+            setMusicTrack={setMusicTrack}
+            musicVolume={musicVolume}
+            setMusicVolume={setMusicVolume}
+            musicTracks={MUSIC_TRACKS}
+            onLeaveRoom={resetSession}
+          />
+        ) : gameState.gameType === 'uno' ? (
+          <UnoGame
+            gameState={gameState}
+            hand={hand}
+            playerId={playerId}
+            roomCode={roomCode}
+            musicState={musicState}
+            isHost={isHost}
+          />
+        ) : (
+          <CahGame
+            gameState={gameState}
+            hand={hand}
+            playerId={playerId}
+            roomCode={roomCode}
+            musicState={musicState}
+            isHost={isHost}
+          />
+        )}
+      </div>
     </div>
   );
 }
