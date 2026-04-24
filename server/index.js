@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { Server } = require('socket.io');
 const { createGameState: createUnoState, playCard, drawCard } = require('./games/uno');
-const { createGameState: createCahState, submitResponse, czarPick, nextRound, addCustomCard } = require('./games/cah');
+const { createGameState: createCahState, submitResponse, czarPick, voteForWinner, nextRound, addCustomCard } = require('./games/cah');
 
 const app = express();
 const server = http.createServer(app);
@@ -48,7 +48,7 @@ function publicUnoState(room) {
 
 function publicCahState(room) {
   const gs = room.gameState;
-  const czarId = room.players[gs.czarIndex]?.id;
+  const czarId = null;
   return {
     id: room.id,
     gameType: 'cah',
@@ -58,6 +58,8 @@ function publicCahState(room) {
     czarIndex: gs.czarIndex,
     czarId,
     submittedIds: Object.keys(gs.submissions),
+    votedIds: Object.keys(gs.votes || {}),
+    votes: gs.phase === 'results' ? gs.votes : null,
     submissions: gs.phase === 'judging' || gs.phase === 'results' ? gs.submissions : null,
     roundWinner: gs.roundWinner,
     scores: gs.scores,
@@ -131,9 +133,7 @@ function removePlayer(room, code, player) {
       }
 
       if (gs.phase === 'playing' && room.players.length > 1) {
-        const czarId = room.players[gs.czarIndex]?.id;
-        const nonCzar = room.players.filter(p => p.id !== czarId);
-        if (nonCzar.length > 0 && nonCzar.every(p => gs.submissions[p.id])) {
+        if (room.players.length > 0 && room.players.every(p => gs.submissions[p.id])) {
           gs.phase = 'judging';
         }
       }
@@ -294,13 +294,25 @@ io.on('connection', socket => {
     io.to(code).emit('game_state', getPublicState(room));
   });
 
+  socket.on('cah_vote', ({ code, winnerId }) => {
+    const room = rooms[code];
+    if (!room || !room.gameState || room.gameType !== 'cah') return;
+
+    const player = room.players.find(p => p.socketId === socket.id);
+    if (!player) return;
+
+    const result = voteForWinner(room.gameState, player.id, winnerId, room.players);
+    if (result.error) { socket.emit('error', { message: result.error }); return; }
+
+    io.to(code).emit('game_state', getPublicState(room));
+  });
+
   socket.on('cah_czar_pick', ({ code, winnerId }) => {
     const room = rooms[code];
     if (!room || !room.gameState || room.gameType !== 'cah') return;
 
-    const czarId = room.players[room.gameState.czarIndex]?.id;
     const player = room.players.find(p => p.socketId === socket.id);
-    if (!player || player.id !== czarId) { socket.emit('error', { message: 'Only the Czar can pick' }); return; }
+    if (!player || player.id !== room.host) { socket.emit('error', { message: 'Only the host can force-pick a winner' }); return; }
 
     const result = czarPick(room.gameState, winnerId);
     if (result.error) { socket.emit('error', { message: result.error }); return; }
@@ -337,6 +349,7 @@ io.on('connection', socket => {
 
     socket.emit('card_created', { card: result.card });
     io.to(code).emit('custom_card_added', { creatorName: player.name });
+    io.to(code).emit('game_state', getPublicState(room));
   });
 
   socket.on('music_control', ({ code, action, track, startedAt }) => {

@@ -731,7 +731,7 @@ html, body {
 
 .cah-body {
   flex: 1;
-  padding: 16px;
+  padding: 16px 16px 88px;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -876,10 +876,18 @@ html, body {
 }
 
 .submit-area {
+  position: sticky;
+  bottom: 62px;
+  z-index: 60;
   display: flex;
   gap: 10px;
   align-items: center;
   flex-wrap: wrap;
+  padding: 10px;
+  background: rgba(13,13,26,0.94);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  backdrop-filter: blur(10px);
 }
 
 .selected-preview {

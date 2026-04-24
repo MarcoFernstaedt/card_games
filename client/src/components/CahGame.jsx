@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import socket from '../socket';
 import CreateCard from './CreateCard';
 import MusicControls from './MusicControls';
@@ -42,11 +42,9 @@ function WhiteCard({ card, selected, onClick, winner }) {
 export default function CahGame({ gameState, hand, playerId, roomCode, musicState, isHost }) {
   const [selected, setSelected] = useState([]);
   const [showCreateCard, setShowCreateCard] = useState(false);
+  const spokenResultRef = useRef(null);
 
-  const isCzar = gameState.czarId === playerId;
-  const myScore = gameState.scores?.[playerId] || 0;
   const myCustomCount = gameState.customCardCounts?.[playerId] || 0;
-  const canCreateCard = myScore >= 3 && myCustomCount < Math.floor(myScore / 3);
   const pick = gameState.currentBlackCard?.pick || 1;
 
   function toggleCard(idx) {
@@ -65,8 +63,8 @@ export default function CahGame({ gameState, hand, playerId, roomCode, musicStat
     setSelected([]);
   }
 
-  function handleCzarPick(winnerId) {
-    socket.emit('cah_czar_pick', { code: roomCode, winnerId });
+  function handleVote(winnerId) {
+    socket.emit('cah_vote', { code: roomCode, winnerId });
   }
 
   function handleNextRound() {
@@ -74,8 +72,33 @@ export default function CahGame({ gameState, hand, playerId, roomCode, musicStat
   }
 
   const alreadySubmitted = gameState.submittedIds?.includes(playerId);
-  const czarPlayer = gameState.players?.find(p => p.id === gameState.czarId);
+  const alreadyVoted = gameState.votedIds?.includes(playerId);
+  const playerById = Object.fromEntries((gameState.players || []).map(p => [p.id, p]));
   const roundWinnerPlayer = gameState.players?.find(p => p.id === gameState.roundWinner);
+
+  function answerText(cards = []) {
+    return cards.map(c => c.text).join(' and ');
+  }
+
+  useEffect(() => {
+    if (gameState.phase !== 'results' || !gameState.roundWinner || !gameState.submissions) return;
+    const resultKey = `${gameState.currentBlackCard?.id || gameState.currentBlackCard?.text}-${gameState.roundWinner}`;
+    if (spokenResultRef.current === resultKey) return;
+    spokenResultRef.current = resultKey;
+
+    if (typeof window === 'undefined' || !window.speechSynthesis || !window.SpeechSynthesisUtterance) return;
+
+    const prompt = gameState.currentBlackCard?.text || 'the prompt';
+    const choices = Object.entries(gameState.submissions)
+      .map(([pid, cards]) => `${playerById[pid]?.name || 'A player'} chose ${answerText(cards)}`)
+      .join('. ');
+    const winnerName = playerById[gameState.roundWinner]?.name || 'The winner';
+    const winnerChoice = answerText(gameState.submissions[gameState.roundWinner]);
+    const announcement = `Prompt: ${prompt}. ${choices}. ${winnerName} wins the round with ${winnerChoice}.`;
+
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(new window.SpeechSynthesisUtterance(announcement));
+  }, [gameState.phase, gameState.roundWinner, gameState.currentBlackCard, gameState.submissions, playerById]);
 
   return (
     <div className="cah-game">
@@ -104,25 +127,31 @@ export default function CahGame({ gameState, hand, playerId, roomCode, musicStat
         {/* Black card */}
         <BlackCard card={gameState.currentBlackCard} />
 
-        {/* Czar indicator */}
+        {/* Custom card creator */}
         <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-          <div className="czar-badge">
-            👑 Card Czar: {czarPlayer?.name}
+          <button className="btn-sm" onClick={() => setShowCreateCard(v => !v)}>
+            ✨ {showCreateCard ? 'Hide Custom Card Creator' : 'Create a Custom Card'}
+          </button>
+          <div className="cah-status" style={{ flex: 1 }}>
+Everyone plays an answer to the prompt, then everyone votes for the funniest response.
           </div>
-          {isCzar && (
-            <div className="cah-status" style={{ flex: 1 }}>
-              You are the Czar — wait for submissions
-            </div>
-          )}
         </div>
 
+        {showCreateCard && (
+          <CreateCard
+            roomCode={roomCode}
+            myCustomCount={myCustomCount}
+            onClose={() => setShowCreateCard(false)}
+          />
+        )}
+
         {/* PLAYING PHASE */}
-        {gameState.phase === 'playing' && !isCzar && (
+        {gameState.phase === 'playing' && (
           <>
             {alreadySubmitted ? (
               <div className="waiting-msg">
                 <div className="spinner" />
-                Waiting for others ({gameState.submittedIds?.length}/{gameState.players?.length - 1})
+                Waiting for others ({gameState.submittedIds?.length}/{gameState.players?.length})
               </div>
             ) : (
               <>
@@ -159,38 +188,34 @@ export default function CahGame({ gameState, hand, playerId, roomCode, musicStat
           </>
         )}
 
-        {gameState.phase === 'playing' && isCzar && (
-          <div className="czar-wait">
-            <div className="czar-icon">⏳</div>
-            <p>Waiting for {gameState.players?.length - 1 - (gameState.submittedIds?.length || 0)} more player(s) to submit...</p>
-            <p style={{ marginTop: 8, fontSize: '0.82rem' }}>{gameState.submittedIds?.length || 0} / {gameState.players?.length - 1} submitted</p>
-          </div>
-        )}
-
         {/* JUDGING PHASE */}
         {gameState.phase === 'judging' && (
           <>
-            {isCzar ? (
-              <div>
-                <div className="section-label">Tap the funniest response to pick a winner</div>
-                <div className="submissions-grid">
-                  {gameState.submissions && Object.entries(gameState.submissions).map(([pid, cards]) => (
-                    <div
-                      key={pid}
-                      className="submission-group"
-                      onClick={() => handleCzarPick(pid)}
-                    >
-                      {cards.map((c, i) => (
-                        <div key={i} className="submission-card-text">{c.text}</div>
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : (
+            {alreadyVoted ? (
               <div className="waiting-msg">
                 <div className="spinner" />
-                The Czar is judging...
+                Waiting for votes ({gameState.votedIds?.length || 0}/{gameState.players?.length})
+              </div>
+            ) : (
+              <div>
+                <div className="section-label">Vote for the funniest response (not your own)</div>
+                <div className="submissions-grid">
+                  {gameState.submissions && Object.entries(gameState.submissions).map(([pid, cards]) => {
+                    const isMine = pid === playerId;
+                    return (
+                      <div
+                        key={pid}
+                        className={`submission-group ${isMine ? 'disabled' : ''}`}
+                        onClick={() => !isMine && handleVote(pid)}
+                      >
+                        <div className="submission-player-name">{playerById[pid]?.name || 'Player'}{isMine ? ' (you)' : ''}</div>
+                        {cards.map((c, i) => (
+                          <div key={i} className="submission-card-text">{c.text}</div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             )}
           </>
@@ -227,9 +252,9 @@ export default function CahGame({ gameState, hand, playerId, roomCode, musicStat
                 ))}
             </div>
 
-            {canCreateCard && !showCreateCard && (
+            {!showCreateCard && (
               <div style={{ padding: '10px 0' }}>
-                <div className="section-label">You unlocked a custom card!</div>
+                <div className="section-label">Create another custom card</div>
                 <button className="btn-sm" onClick={() => setShowCreateCard(true)}>
                   ✨ Create a Custom Card
                 </button>
@@ -239,7 +264,6 @@ export default function CahGame({ gameState, hand, playerId, roomCode, musicStat
             {showCreateCard && (
               <CreateCard
                 roomCode={roomCode}
-                myScore={myScore}
                 myCustomCount={myCustomCount}
                 onClose={() => setShowCreateCard(false)}
               />

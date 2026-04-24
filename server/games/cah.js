@@ -26,6 +26,7 @@ function createGameState(players) {
     czarIndex: 0,
     phase: 'playing',
     submissions: {},
+    votes: {},
     roundWinner: null,
     scores: Object.fromEntries(players.map(p => [p.id, 0])),
     customCards: [],
@@ -34,8 +35,6 @@ function createGameState(players) {
 }
 
 function submitResponse(gameState, playerId, cardIndices, players) {
-  const czarId = players[gameState.czarIndex].id;
-  if (playerId === czarId) return { error: 'The Czar cannot submit cards' };
   if (gameState.submissions[playerId]) return { error: 'Already submitted this round' };
 
   const pick = gameState.currentBlackCard.pick;
@@ -51,14 +50,13 @@ function submitResponse(gameState, playerId, cardIndices, players) {
 
   gameState.submissions[playerId] = submitted;
 
-  const nonCzar = players.filter(p => p.id !== czarId);
-  const allSubmitted = nonCzar.every(p => gameState.submissions[p.id]);
+  const allSubmitted = players.every(p => gameState.submissions[p.id]);
   if (allSubmitted) gameState.phase = 'judging';
 
   return { success: true, allSubmitted };
 }
 
-function czarPick(gameState, winnerId) {
+function finishRound(gameState, winnerId) {
   if (!gameState.submissions[winnerId]) return { error: 'Invalid selection' };
 
   gameState.scores[winnerId] = (gameState.scores[winnerId] || 0) + 1;
@@ -66,6 +64,37 @@ function czarPick(gameState, winnerId) {
   gameState.phase = 'results';
 
   return { success: true };
+}
+
+function voteForWinner(gameState, voterId, winnerId, players) {
+  if (gameState.phase !== 'judging') return { error: 'Not time to vote yet' };
+  if (!gameState.submissions[voterId]) return { error: 'You must submit before voting' };
+  if (!gameState.submissions[winnerId]) return { error: 'Invalid selection' };
+  if (voterId === winnerId) return { error: 'You cannot vote for your own answer' };
+  if (gameState.votes[voterId]) return { error: 'Already voted this round' };
+
+  gameState.votes[voterId] = winnerId;
+
+  const activeSubmitters = players.filter(p => gameState.submissions[p.id]);
+  const allVoted = activeSubmitters.every(p => gameState.votes[p.id]);
+  if (!allVoted) return { success: true, allVoted: false };
+
+  const totals = {};
+  for (const votedFor of Object.values(gameState.votes)) {
+    totals[votedFor] = (totals[votedFor] || 0) + 1;
+  }
+
+  const topVoteCount = Math.max(...Object.values(totals));
+  const tied = Object.entries(totals)
+    .filter(([, count]) => count === topVoteCount)
+    .map(([pid]) => pid);
+  const winnerIdFromVotes = tied[Math.floor(Math.random() * tied.length)];
+  const finish = finishRound(gameState, winnerIdFromVotes);
+  return finish.error ? finish : { success: true, allVoted: true, winnerId: winnerIdFromVotes };
+}
+
+function czarPick(gameState, winnerId) {
+  return finishRound(gameState, winnerId);
 }
 
 function nextRound(gameState, players) {
@@ -83,6 +112,7 @@ function nextRound(gameState, players) {
   }
   gameState.whiteDeck = deck;
   gameState.submissions = {};
+  gameState.votes = {};
   gameState.roundWinner = null;
   gameState.phase = 'playing';
 
@@ -90,13 +120,7 @@ function nextRound(gameState, players) {
 }
 
 function addCustomCard(gameState, playerId, cardText) {
-  const score = gameState.scores[playerId] || 0;
   const used = gameState.customCardCounts[playerId] || 0;
-  const allowed = Math.floor(score / 3);
-
-  if (used >= allowed) {
-    return { error: `Need ${(used + 1) * 3} points to create another card (you have ${score})` };
-  }
 
   const card = {
     id: `custom_${Date.now()}_${Math.random().toString(36).slice(2)}`,
@@ -106,10 +130,17 @@ function addCustomCard(gameState, playerId, cardText) {
   };
 
   gameState.customCards.push(card);
-  gameState.whiteDeck.push(card);
   gameState.customCardCounts[playerId] = used + 1;
+
+  // Let the creator use their own card right away when possible; otherwise it goes into the shared deck.
+  const hand = gameState.hands[playerId];
+  if (hand && hand.length < 10) {
+    hand.push(card);
+  } else {
+    gameState.whiteDeck.push(card);
+  }
 
   return { success: true, card };
 }
 
-module.exports = { createGameState, submitResponse, czarPick, nextRound, addCustomCard };
+module.exports = { createGameState, submitResponse, czarPick, voteForWinner, nextRound, addCustomCard };

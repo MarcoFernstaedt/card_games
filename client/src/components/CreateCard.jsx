@@ -1,11 +1,9 @@
 import { useState } from 'react';
 import socket from '../socket';
 
-export default function CreateCard({ roomCode, myScore, myCustomCount, onClose }) {
+export default function CreateCard({ roomCode, myCustomCount, onClose }) {
   const [text, setText] = useState('');
   const [submitted, setSubmitted] = useState(false);
-
-  const maxAllowed = Math.floor(myScore / 3);
 
   function handleSubmit() {
     if (!text.trim()) return;
@@ -22,8 +20,8 @@ export default function CreateCard({ roomCode, myScore, myCustomCount, onClose }
     <div className="create-card-panel">
       <h3>✨ Create a Custom Card</h3>
       <p>
-        Your custom card will be added to the white card deck for everyone to draw.
-        You've used {myCustomCount} of {maxAllowed} custom card slots.
+        Create your own white card. If your hand has room, it is added to your hand right away; otherwise it goes into the shared deck.
+        You've created {myCustomCount} custom card{myCustomCount === 1 ? '' : 's'} this game.
       </p>
 
       {submitted ? (
