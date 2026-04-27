@@ -53,12 +53,15 @@ function getNextIndex(count, current, direction, skip = false) {
   return next;
 }
 
-function createGameState(players, unoMode = 'classic') {
+function createGameState(players, unoMode = 'classic', options = {}) {
+  const configuredHandSize = Number(options.handSize);
+  const handSize = Number.isFinite(configuredHandSize) && configuredHandSize > 0 ? configuredHandSize : 7;
+  const configuredTurnLimit = Number(options.turnLimit);
   const deck = createDeck();
   const hands = {};
 
   for (const player of players) {
-    hands[player.id] = deck.splice(0, 7);
+    hands[player.id] = deck.splice(0, handSize);
   }
 
   // First card must be a number card
@@ -78,7 +81,23 @@ function createGameState(players, unoMode = 'classic') {
     pendingDrawType: null,
     mercyVotes: {},
     mercyVoteTarget: null,
+    turns: 0,
+    turnLimit: Number.isFinite(configuredTurnLimit) && configuredTurnLimit > 0 ? configuredTurnLimit : null,
   };
+}
+
+function applyTurnLimit(gameState, players) {
+  if (!gameState.turnLimit || gameState.winner || gameState.turns < gameState.turnLimit) return;
+  let winnerId = players[0]?.id;
+  for (const player of players) {
+    if ((gameState.hands[player.id]?.length ?? Infinity) < (gameState.hands[winnerId]?.length ?? Infinity)) winnerId = player.id;
+  }
+  gameState.winner = winnerId;
+}
+
+function finishTurn(gameState, players) {
+  gameState.turns += 1;
+  applyTurnLimit(gameState, players);
 }
 
 function playCard(gameState, playerIndex, cardIndex, chosenColor, players) {
@@ -168,7 +187,8 @@ function playCard(gameState, playerIndex, cardIndex, chosenColor, players) {
   }
 
   gameState.currentPlayerIndex = getNextIndex(count, playerIndex, gameState.direction, skip);
-  return { success: true };
+  finishTurn(gameState, players);
+  return gameState.winner ? { winner: gameState.winner } : { success: true };
 }
 
 function drawCard(gameState, playerIndex, players) {
@@ -187,7 +207,8 @@ function drawCard(gameState, playerIndex, players) {
     gameState.pendingDrawType = null;
     // Drawing while stacked skips the drawing player's turn
     gameState.currentPlayerIndex = getNextIndex(count, playerIndex, gameState.direction, true);
-    return { drawn: true, absorbed: total };
+    finishTurn(gameState, players);
+    return gameState.winner ? { winner: gameState.winner, drawn: true, absorbed: total } : { drawn: true, absorbed: total };
   }
 
   if (gameState.deck.length === 0) reshuffleDeck(gameState);
@@ -197,8 +218,9 @@ function drawCard(gameState, playerIndex, players) {
   gameState.hands[playerId].push(card);
 
   gameState.currentPlayerIndex = getNextIndex(count, playerIndex, gameState.direction);
+  finishTurn(gameState, players);
 
-  return { card, drawn: true };
+  return gameState.winner ? { winner: gameState.winner, card, drawn: true } : { card, drawn: true };
 }
 
 // Mercy vote: any player can nominate a player with 15+ cards to be reduced to 7

@@ -350,7 +350,7 @@ io.on('connection', socket => {
 
     socket.emit('room_joined', { code: code.toUpperCase(), playerId: pid });
     if (room.gameState) {
-      const hand = room.gameState.hands[pid];
+      const hand = room.gameState.hands?.[pid];
       if (hand) socket.emit('hand_update', { hand });
     }
     if (room.musicState) {
@@ -417,13 +417,21 @@ io.on('connection', socket => {
     if (room.players.length < 2) { socket.emit('error', { message: 'Need at least 2 players' }); return; }
 
     if (room.gameType === 'uno') {
-      room.gameState = createUnoState(room.players, room.unoMode || 'classic');
+      room.gameState = createUnoState(room.players, room.unoMode || 'classic', {
+        handSize: process.env.UNO_HAND_SIZE,
+        turnLimit: process.env.UNO_TURN_LIMIT,
+      });
     } else if (room.gameType === 'monopoly') {
       room.gameState = createMonopolyState(room.players, { timeLimitSeconds: process.env.MONOPOLY_TIME_LIMIT_SECONDS });
       startMonopolyTimer(code, room);
     } else if (room.gameType === 'action') {
       const mode = room.actionMode || 'impostor';
-      room.gameState = createActionState(room.players, mode);
+      room.gameState = createActionState(room.players, mode, {
+        firefightTicks: process.env.ACTION_FIREFIGHT_TICKS,
+        taskCount: process.env.ACTION_TASK_COUNT,
+        taskTicks: process.env.ACTION_TASK_TICKS,
+        startNearTask: process.env.ACTION_START_NEAR_TASK,
+      });
       room.gameState.inputQueue = {};
       // Send private roles in impostor mode
       if (mode === 'impostor') {
@@ -435,7 +443,7 @@ io.on('connection', socket => {
       }
       startActionLoop(code);
     } else {
-      room.gameState = createCahState(room.players);
+      room.gameState = createCahState(room.players, { maxRounds: process.env.CAH_MAX_ROUNDS });
     }
 
     recordActivity('game_started', roomActivityDetails(room));
@@ -483,6 +491,10 @@ io.on('connection', socket => {
 
     sendHands(room);
     io.to(code).emit('game_state', getPublicState(room));
+    if (result.winner) {
+      const winnerName = room.players.find(p => p.id === result.winner)?.name;
+      io.to(code).emit('game_over', { winner: result.winner, winnerName });
+    }
   });
 
   socket.on('cah_submit', ({ code, cardIndices }) => {

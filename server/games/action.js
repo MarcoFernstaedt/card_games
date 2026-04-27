@@ -78,9 +78,14 @@ function dist(ax, ay, bx, by) {
 
 let bulletIdCounter = 0;
 
-function createGameState(players, mode) {
+function createGameState(players, mode, options = {}) {
+  const firefightTicks = Number(options.firefightTicks);
+  const taskCount = Number(options.taskCount);
+  const taskTicks = Number(options.taskTicks);
+  const startNearTask = options.startNearTask === true || options.startNearTask === '1' || options.startNearTask === 'true';
   const playerStates = {};
   const shuffledSpawns = [...SPAWNS].sort(() => Math.random() - 0.5);
+  if (mode === 'impostor' && startNearTask) shuffledSpawns[0] = { x: 120, y: 300 };
 
   // Assign impostor randomly in impostor mode
   const impostorIndex = mode === 'impostor' ? Math.floor(Math.random() * players.length) : -1;
@@ -103,8 +108,11 @@ function createGameState(players, mode) {
     };
   });
 
+  const selectedTaskPositions = Number.isFinite(taskCount) && taskCount > 0
+    ? TASK_POSITIONS.slice(0, Math.min(taskCount, TASK_POSITIONS.length))
+    : TASK_POSITIONS;
   const tasks = mode === 'impostor'
-    ? TASK_POSITIONS.map((pos, i) => ({ id: i, x: pos.x, y: pos.y, done: false, workerId: null, progress: 0 }))
+    ? selectedTaskPositions.map((pos, i) => ({ id: i, x: pos.x, y: pos.y, done: false, workerId: null, progress: 0 }))
     : [];
 
   const pickups = mode === 'firefight'
@@ -120,10 +128,11 @@ function createGameState(players, mode) {
     pickups,
     completedTasks: 0,
     totalTasks: tasks.length,
-    timeRemaining: mode === 'firefight' ? 900 : null,
+    timeRemaining: mode === 'firefight' ? (Number.isFinite(firefightTicks) && firefightTicks > 0 ? firefightTicks : 900) : null,
     winner: null,
     inputQueue: {},
     taskProgress: {},
+    taskTicks: Number.isFinite(taskTicks) && taskTicks > 0 ? taskTicks : 60,
   };
 }
 
@@ -182,8 +191,8 @@ function applyInputs(gameState, inputs) {
           const tp = gameState.taskProgress[task.id];
           if (tp.playerId === playerId) {
             tp.ticks += 1;
-            task.progress = tp.ticks / 60; // 3s at 20 Hz
-            if (tp.ticks >= 60) {
+            task.progress = tp.ticks / gameState.taskTicks; // default 3s at 20 Hz
+            if (tp.ticks >= gameState.taskTicks) {
               task.done = true;
               task.progress = 1;
               gameState.completedTasks += 1;

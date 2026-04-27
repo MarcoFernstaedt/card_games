@@ -9,7 +9,8 @@ function shuffle(array) {
   return arr;
 }
 
-function createGameState(players) {
+function createGameState(players, options = {}) {
+  const maxRounds = Number(options.maxRounds);
   const shuffledBlack = shuffle([...blackCards]);
   const whiteDeck = shuffle([...defaultWhiteCards]);
   const hands = {};
@@ -19,7 +20,7 @@ function createGameState(players) {
   }
 
   return {
-    blackDeck: shuffledBlack.slice(1),
+    blackDeck: Number.isFinite(maxRounds) && maxRounds > 1 ? shuffledBlack.slice(1, maxRounds) : shuffledBlack.slice(1),
     whiteDeck,
     currentBlackCard: shuffledBlack[0],
     hands,
