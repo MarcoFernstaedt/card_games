@@ -60,7 +60,9 @@ const CHANCE_CARDS = shuffle([
   { id: 'inheritance',   text: 'You inherit $100.', effect: 'gain', amount: 100 },
 ]);
 
-function createGameState(players) {
+function createGameState(players, options = {}) {
+  const configuredTimeLimit = Number(options.timeLimitSeconds);
+  const timeLimit = Number.isFinite(configuredTimeLimit) && configuredTimeLimit > 0 ? configuredTimeLimit : 20 * 60;
   const playerStates = {};
   for (const p of players) {
     playerStates[p.id] = {
@@ -87,7 +89,7 @@ function createGameState(players) {
     chanceCards: [...CHANCE_CARDS],
     chanceDiscard: [],
     pendingDecision: null,
-    timeLimit: 20 * 60,
+    timeLimit,
     elapsedTime: 0,
   };
 }

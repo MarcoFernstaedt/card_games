@@ -154,7 +154,7 @@ function roomActivityDetails(room) {
 }
 
 function sendHands(room) {
-  if (!room.gameState) return;
+  if (!room.gameState?.hands) return;
   for (const player of room.players) {
     const sock = io.sockets.sockets.get(player.socketId);
     if (sock) {
@@ -182,7 +182,7 @@ function removePlayer(room, code, player) {
 
   if (room.gameState) {
     const gs = room.gameState;
-    delete gs.hands[leavingId];
+    if (gs.hands) delete gs.hands[leavingId];
 
     if (room.gameType === 'uno') {
       if (idx < gs.currentPlayerIndex) {
@@ -419,7 +419,7 @@ io.on('connection', socket => {
     if (room.gameType === 'uno') {
       room.gameState = createUnoState(room.players, room.unoMode || 'classic');
     } else if (room.gameType === 'monopoly') {
-      room.gameState = createMonopolyState(room.players);
+      room.gameState = createMonopolyState(room.players, { timeLimitSeconds: process.env.MONOPOLY_TIME_LIMIT_SECONDS });
       startMonopolyTimer(code, room);
     } else if (room.gameType === 'action') {
       const mode = room.actionMode || 'impostor';

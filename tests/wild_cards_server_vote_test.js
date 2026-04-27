@@ -11,7 +11,8 @@ const gs = createGameState(players);
 assert.strictEqual(gs.phase, 'playing');
 
 for (const player of players) {
-  const result = submitResponse(gs, player.id, [0], players);
+  const picks = Array.from({ length: gs.currentBlackCard.pick }, (_, index) => index);
+  const result = submitResponse(gs, player.id, picks, players);
   assert.ifError(result.error);
 }
 
