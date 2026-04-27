@@ -83,6 +83,9 @@ export default function UnoGame({ gameState, hand, playerId, roomCode, musicStat
   const drawStack = gameState.drawStack || 0;
   const pendingDrawType = gameState.pendingDrawType;
   const winner = gameState.winner;
+  const drawPileLabel = isMyTurn
+    ? (isMercyMode && drawStack > 0 ? `Draw pile. Tap deck to draw ${drawStack} cards` : 'Draw pile. Tap to draw one card')
+    : 'Draw pile';
   const turnKey = `${gameState.currentPlayerIndex}:${topCard?.id || topCard?.value || 'start'}:${gameState.deckCount}`;
 
   useEffect(() => {
@@ -213,18 +216,10 @@ export default function UnoGame({ gameState, hand, playerId, roomCode, musicStat
             </div>
             <div style={{ fontSize: '0.75rem', color: 'var(--muted)', marginTop: 2 }}>
               {isMyTurn
-                ? `Stack a ${pendingDrawType === 'draw_two' ? '+2' : '+4'} to pass it on, or draw ${drawStack} cards`
+                ? `Stack a ${pendingDrawType === 'draw_two' ? '+2' : '+4'} to pass it on, or tap deck to draw ${drawStack}`
                 : `Next player must stack a ${pendingDrawType === 'draw_two' ? '+2' : '+4'} or draw ${drawStack}`}
             </div>
           </div>
-          {isMyTurn && (
-            <button
-              onClick={handleDraw}
-              style={{ background: 'var(--accent2)', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 12px', fontWeight: 700, cursor: 'pointer', fontSize: '0.8rem' }}
-            >
-              Draw {drawStack}
-            </button>
-          )}
         </div>
       )}
 
@@ -299,14 +294,18 @@ export default function UnoGame({ gameState, hand, playerId, roomCode, musicStat
 
           <div>
             <div className="pile-label">Draw Pile</div>
-            <div
+            <button
+              type="button"
+              data-testid="uno-draw-pile"
               className="deck-pile"
-              onClick={isMyTurn && !(isMercyMode && drawStack > 0) ? handleDraw : undefined}
-              style={!isMyTurn || (isMercyMode && drawStack > 0) ? { opacity: 0.5, cursor: 'default' } : {}}
+              aria-label={drawPileLabel}
+              onClick={isMyTurn ? handleDraw : undefined}
+              disabled={!isMyTurn}
+              style={!isMyTurn ? { opacity: 0.5, cursor: 'default' } : {}}
             >
               <div className="deck-count">{gameState.deckCount}</div>
-              <div className="deck-label">{isMyTurn && !(isMercyMode && drawStack > 0) ? 'Tap to draw' : 'cards left'}</div>
-            </div>
+              <div className="deck-label">{isMyTurn ? (isMercyMode && drawStack > 0 ? `Tap to draw +${drawStack}` : 'Tap to draw') : 'cards left'}</div>
+            </button>
           </div>
         </div>
 

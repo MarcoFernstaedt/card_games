@@ -278,8 +278,15 @@ async function joinUnoRoomBots() {
   await Promise.all(joinedBots.map((joined) => joined));
   for (const bot of bots) {
     bot.socket.on('game_over', payload => console.log('GAME_OVER', JSON.stringify({ name: bot.name, payload })));
+    bot.socket.on('player_disconnected', payload => console.log('PLAYER_DISCONNECTED', JSON.stringify({ name: bot.name, payload })));
+    bot.socket.on('player_rejoined', payload => console.log('PLAYER_REJOINED', JSON.stringify({ name: bot.name, payload })));
   }
   console.log('JOINED_BOTS_READY', JSON.stringify({ code, count, names: bots.map((bot) => bot.name), url }));
+  setInterval(() => {
+    for (const bot of bots) {
+      if (!bot.stopped && bot.socket.connected) console.log('BOT_STILL_CONNECTED', JSON.stringify({ code: bot.code, name: bot.name, actions: bot.actions }));
+    }
+  }, 30000);
 }
 (async () => {
   const cmd = process.argv[2] || 'suite';

@@ -146,10 +146,9 @@ function playCard(gameState, playerIndex, cardIndex, chosenColor, players) {
       break;
     case 'draw_two': {
       if (gameState.unoMode === 'mercy') {
-        // Stack the draw instead of applying immediately
+        // Stack the draw and make the next player decide to stack or draw.
         gameState.drawStack += 2;
         gameState.pendingDrawType = 'draw_two';
-        skip = true;
       } else {
         const nextIdx = getNextIndex(count, playerIndex, gameState.direction);
         const nextId = players[nextIdx].id;
@@ -165,7 +164,6 @@ function playCard(gameState, playerIndex, cardIndex, chosenColor, players) {
       if (gameState.unoMode === 'mercy') {
         gameState.drawStack += 4;
         gameState.pendingDrawType = 'wild_draw_four';
-        skip = true;
       } else {
         const nextIdx = getNextIndex(count, playerIndex, gameState.direction);
         const nextId = players[nextIdx].id;
@@ -205,8 +203,8 @@ function drawCard(gameState, playerIndex, players) {
     }
     gameState.drawStack = 0;
     gameState.pendingDrawType = null;
-    // Drawing while stacked skips the drawing player's turn
-    gameState.currentPlayerIndex = getNextIndex(count, playerIndex, gameState.direction, true);
+    // Drawing the stack consumes this player's turn, then play advances once.
+    gameState.currentPlayerIndex = getNextIndex(count, playerIndex, gameState.direction);
     finishTurn(gameState, players);
     return gameState.winner ? { winner: gameState.winner, drawn: true, absorbed: total } : { drawn: true, absorbed: total };
   }

@@ -18,6 +18,8 @@ const io = new Server(server, {
 
 const rooms = {};
 const reconnectTimers = {};
+const RECONNECT_GRACE_MS = Number(process.env.RECONNECT_GRACE_MS || 30000);
+const ACTIVE_GAME_RECONNECT_GRACE_MS = Number(process.env.ACTIVE_GAME_RECONNECT_GRACE_MS || 300000);
 
 function generateCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -655,6 +657,7 @@ io.on('connection', socket => {
       io.to(code).emit('game_state', getPublicState(room));
 
       const timerKey = `${code}-${player.id}`;
+      const graceMs = room.gameState ? ACTIVE_GAME_RECONNECT_GRACE_MS : RECONNECT_GRACE_MS;
       reconnectTimers[timerKey] = setTimeout(() => {
         delete reconnectTimers[timerKey];
         const currentRoom = rooms[code];
@@ -663,7 +666,7 @@ io.on('connection', socket => {
         if (stillInRoom && stillInRoom.disconnected) {
           removePlayer(currentRoom, code, stillInRoom);
         }
-      }, 30000);
+      }, graceMs);
     }
   });
 });
