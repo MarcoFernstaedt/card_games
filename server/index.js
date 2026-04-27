@@ -7,6 +7,7 @@ const { createGameState: createUnoState, playCard, drawCard, mercyVote } = requi
 const { createGameState: createCahState, submitResponse, czarPick, voteForWinner, nextRound, addCustomCard } = require('./games/cah');
 const { createGameState: createMonopolyState, doRoll, buyProperty, passProperty, mortgageProperty, getNetWorth } = require('./games/monopoly');
 const { createGameState: createActionState, applyInputs, resolveBullets, resolveRespawns, resolvePickups, checkWinCondition, getPublicSnapshot } = require('./games/action');
+const { activityReport, recordActivity, shouldTrackPageHit } = require('./activity');
 
 const app = express();
 const server = http.createServer(app);
@@ -144,6 +145,15 @@ function getPublicState(room) {
     };
   }
   return publicCahState(room);
+}
+
+function roomActivityDetails(room) {
+  return {
+    gameType: room?.gameType,
+    playerCount: room?.players?.length || 0,
+    roomCount: Object.keys(rooms).length,
+    activeSockets: io.engine.clientsCount || 0,
+  };
 }
 
 function sendHands(room) {
@@ -293,6 +303,8 @@ function startActionLoop(code) {
 }
 
 io.on('connection', socket => {
+  recordActivity('socket_connection', { activeSockets: io.engine.clientsCount || 0, roomCount: Object.keys(rooms).length });
+
   socket.on('create_room', ({ name, gameType, unoMode, pid }) => {
     const code = generateCode();
     const playerId = pid || socket.id;
@@ -306,6 +318,7 @@ io.on('connection', socket => {
       musicState: { playing: false, track: 'hype', startedAt: null },
     };
     socket.join(code);
+    recordActivity('room_created', roomActivityDetails(rooms[code]));
     socket.emit('room_created', { code, playerId });
     io.to(code).emit('game_state', getPublicState(rooms[code]));
   });
@@ -320,6 +333,7 @@ io.on('connection', socket => {
     const playerId = pid || socket.id;
     room.players.push({ id: playerId, name, socketId: socket.id, disconnected: false });
     socket.join(code.toUpperCase());
+    recordActivity('room_joined', roomActivityDetails(room));
     socket.emit('room_joined', { code: code.toUpperCase(), playerId });
     io.to(code.toUpperCase()).emit('game_state', getPublicState(room));
   });
@@ -340,6 +354,7 @@ io.on('connection', socket => {
     player.socketId = socket.id;
     player.disconnected = false;
     socket.join(code.toUpperCase());
+    recordActivity('player_rejoined', roomActivityDetails(room));
 
     socket.emit('room_joined', { code: code.toUpperCase(), playerId: pid });
     if (room.gameState) {
@@ -430,6 +445,8 @@ io.on('connection', socket => {
     } else {
       room.gameState = createCahState(room.players);
     }
+
+    recordActivity('game_started', roomActivityDetails(room));
 
     sendHands(room);
     io.to(code).emit('game_state', getPublicState(room));
@@ -642,6 +659,7 @@ io.on('connection', socket => {
       if (!player) continue;
 
       player.disconnected = true;
+      recordActivity('player_disconnected', roomActivityDetails(room));
       io.to(code).emit('player_disconnected', { playerName: player.name });
       io.to(code).emit('game_state', getPublicState(room));
 
@@ -660,6 +678,17 @@ io.on('connection', socket => {
 });
 
 const clientDist = path.join(__dirname, '../client/dist');
+app.get('/activity', (req, res) => {
+  res.json(activityReport(rooms, { activeSockets: io.engine.clientsCount || 0 }));
+});
+
+app.use((req, res, next) => {
+  if (shouldTrackPageHit(req)) {
+    recordActivity('page_hit', { path: req.path, roomCount: Object.keys(rooms).length, activeSockets: io.engine.clientsCount || 0 });
+  }
+  next();
+});
+
 if (fs.existsSync(clientDist)) {
   app.use(express.static(clientDist));
   app.get('*', (req, res) => {
