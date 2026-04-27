@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import socket from '../socket';
 import CreateCard from './CreateCard';
 import MusicControls from './MusicControls';
 import Confetti from './Confetti';
+import { formatCardsForSpeech, useAudioTimeWarnings, useGameAnnouncer } from '../hooks/useGameAnnouncer';
 
 function BlackCard({ card }) {
   if (!card) return null;
@@ -42,6 +43,8 @@ function WhiteCard({ card, selected, onClick, winner }) {
 export default function CahGame({ gameState, hand, playerId, roomCode, musicState, isHost }) {
   const [selected, setSelected] = useState([]);
   const [showCreateCard, setShowCreateCard] = useState(false);
+  const announcer = useGameAnnouncer({ rate: 1.24 });
+  const [phaseSecondsLeft, setPhaseSecondsLeft] = useState(90);
   const spokenResultRef = useRef(null);
 
   const myCustomCount = gameState.customCardCounts?.[playerId] || 0;
@@ -73,32 +76,65 @@ export default function CahGame({ gameState, hand, playerId, roomCode, musicStat
 
   const alreadySubmitted = gameState.submittedIds?.includes(playerId);
   const alreadyVoted = gameState.votedIds?.includes(playerId);
-  const playerById = Object.fromEntries((gameState.players || []).map(p => [p.id, p]));
+  const playerById = useMemo(() => Object.fromEntries((gameState.players || []).map(p => [p.id, p])), [gameState.players]);
   const roundWinnerPlayer = gameState.players?.find(p => p.id === gameState.roundWinner);
+  const phaseDuration = gameState.phase === 'judging' ? 45 : gameState.phase === 'results' ? 20 : 90;
+  const phaseTimerKey = `${gameState.currentBlackCard?.id || gameState.currentBlackCard?.text || 'round'}:${gameState.phase}`;
+
+  useEffect(() => {
+    setPhaseSecondsLeft(phaseDuration);
+    const started = Date.now();
+    const timer = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - started) / 1000);
+      setPhaseSecondsLeft(Math.max(0, phaseDuration - elapsed));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [phaseTimerKey, phaseDuration]);
+
+  useAudioTimeWarnings({
+    announcer,
+    gameKey: 'wild-cards',
+    timerKey: phaseTimerKey,
+    secondsLeft: phaseSecondsLeft,
+    thresholds: gameState.phase === 'results' ? [10] : [30, 10],
+    enabled: ['playing', 'judging', 'results'].includes(gameState.phase),
+  });
 
   function answerText(cards = []) {
     return cards.map(c => c.text).join(' and ');
   }
 
+  const submissionEntries = useMemo(() => Object.entries(gameState.submissions || {}), [gameState.submissions]);
+
   useEffect(() => {
-    if (gameState.phase !== 'results' || !gameState.roundWinner || !gameState.submissions) return;
-    const resultKey = `${gameState.currentBlackCard?.id || gameState.currentBlackCard?.text}-${gameState.roundWinner}`;
-    if (spokenResultRef.current === resultKey) return;
-    spokenResultRef.current = resultKey;
-
-    if (typeof window === 'undefined' || !window.speechSynthesis || !window.SpeechSynthesisUtterance) return;
-
     const prompt = gameState.currentBlackCard?.text || 'the prompt';
-    const choices = Object.entries(gameState.submissions)
-      .map(([pid, cards]) => `${playerById[pid]?.name || 'A player'} chose ${answerText(cards)}`)
-      .join('. ');
-    const winnerName = playerById[gameState.roundWinner]?.name || 'The winner';
-    const winnerChoice = answerText(gameState.submissions[gameState.roundWinner]);
-    const announcement = `Prompt: ${prompt}. ${choices}. ${winnerName} wins the round with ${winnerChoice}.`;
+    const roundKey = gameState.currentBlackCard?.id || gameState.currentBlackCard?.text || 'round';
 
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(new window.SpeechSynthesisUtterance(announcement));
-  }, [gameState.phase, gameState.roundWinner, gameState.currentBlackCard, gameState.submissions, playerById]);
+    if (gameState.phase === 'playing') {
+      announcer.speak(
+        `New Wild Cards round. Prompt: ${prompt}. Everyone pick ${pick} card${pick > 1 ? 's' : ''}.`,
+        `wild-cards:playing:${roundKey}`,
+        { interrupt: true }
+      );
+    }
+
+    if (gameState.phase === 'judging' && submissionEntries.length) {
+      const lines = [
+        `Voting phase. Everyone vote for the funniest response. Prompt: ${prompt}.`,
+        ...submissionEntries.map(([pid, cards], index) => `Player pick ${index + 1}. ${playerById[pid]?.name || 'A player'} picked: ${formatCardsForSpeech(cards)}.`),
+      ];
+      announcer.speakSequence(lines, `wild-cards:voting:${roundKey}:${submissionEntries.map(([pid]) => pid).join('-')}`, { interrupt: true, rate: 1.26 });
+    }
+
+    if (gameState.phase === 'results' && gameState.roundWinner && gameState.submissions) {
+      const resultKey = `${roundKey}-${gameState.roundWinner}`;
+      if (spokenResultRef.current === resultKey) return;
+      spokenResultRef.current = resultKey;
+      const winnerName = playerById[gameState.roundWinner]?.name || 'The winner';
+      const winnerChoice = formatCardsForSpeech(gameState.submissions[gameState.roundWinner]);
+      announcer.speak(`${winnerName} wins the round with ${winnerChoice}.`, `wild-cards:result:${resultKey}`, { interrupt: true, rate: 1.24 });
+    }
+  }, [announcer, gameState.phase, gameState.roundWinner, gameState.currentBlackCard, gameState.submissions, submissionEntries, playerById, pick]);
 
   return (
     <div className="cah-game">
@@ -188,7 +224,7 @@ Everyone plays an answer to the prompt, then everyone votes for the funniest res
           </>
         )}
 
-        {/* JUDGING PHASE */}
+        {/* VOTING PHASE */}
         {gameState.phase === 'judging' && (
           <>
             {alreadyVoted ? (
@@ -198,7 +234,7 @@ Everyone plays an answer to the prompt, then everyone votes for the funniest res
               </div>
             ) : (
               <div>
-                <div className="section-label">Vote for the funniest response (not your own)</div>
+                <div className="section-label">Voting phase — vote for the funniest response (not your own)</div>
                 <div className="submissions-grid">
                   {gameState.submissions && Object.entries(gameState.submissions).map(([pid, cards]) => {
                     const isMine = pid === playerId;
@@ -246,7 +282,7 @@ Everyone plays an answer to the prompt, then everyone votes for the funniest res
                 .sort((a, b) => (gameState.scores?.[b.id] || 0) - (gameState.scores?.[a.id] || 0))
                 .map(p => (
                   <div key={p.id} className={`score-row ${p.id === playerId ? 's-me' : ''}`}>
-                    <span className="s-name">{p.name} {p.id === gameState.czarId ? '👑' : ''}</span>
+                    <span className="s-name">{p.name}</span>
                     <span className="s-pts">{gameState.scores?.[p.id] || 0} pts</span>
                   </div>
                 ))}

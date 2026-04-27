@@ -23,7 +23,6 @@ function createGameState(players) {
     whiteDeck,
     currentBlackCard: shuffledBlack[0],
     hands,
-    czarIndex: 0,
     phase: 'playing',
     submissions: {},
     votes: {},
@@ -93,14 +92,9 @@ function voteForWinner(gameState, voterId, winnerId, players) {
   return finish.error ? finish : { success: true, allVoted: true, winnerId: winnerIdFromVotes };
 }
 
-function czarPick(gameState, winnerId) {
-  return finishRound(gameState, winnerId);
-}
-
 function nextRound(gameState, players) {
   if (gameState.blackDeck.length === 0) return { gameOver: true };
 
-  gameState.czarIndex = (gameState.czarIndex + 1) % players.length;
   gameState.currentBlackCard = gameState.blackDeck.shift();
 
   const deck = shuffle([...gameState.whiteDeck, ...gameState.customCards]);
@@ -143,4 +137,4 @@ function addCustomCard(gameState, playerId, cardText) {
   return { success: true, card };
 }
 
-module.exports = { createGameState, submitResponse, czarPick, voteForWinner, nextRound, addCustomCard };
+module.exports = { createGameState, submitResponse, voteForWinner, nextRound, addCustomCard };

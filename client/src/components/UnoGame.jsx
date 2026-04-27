@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import socket from '../socket';
 import MusicControls from './MusicControls';
 import Confetti from './Confetti';
+import { useAudioTimeWarnings, useAudioTurnAnnouncement, useGameAnnouncer } from '../hooks/useGameAnnouncer';
 
 const VALUE_DISPLAY = {
   skip: '⊘',
@@ -71,6 +72,8 @@ function ColorPicker({ onPick }) {
 export default function UnoGame({ gameState, hand, playerId, roomCode, musicState, isHost }) {
   const [pendingWild, setPendingWild] = useState(null);
   const [mercyVoteNotice, setMercyVoteNotice] = useState(null);
+  const [turnSecondsLeft, setTurnSecondsLeft] = useState(60);
+  const announcer = useGameAnnouncer({ rate: 1.22 });
 
   const myPlayerIndex = gameState.players?.findIndex(p => p.id === playerId);
   const isMyTurn = gameState.currentPlayerIndex === myPlayerIndex;
@@ -79,6 +82,37 @@ export default function UnoGame({ gameState, hand, playerId, roomCode, musicStat
   const isMercyMode = gameState.unoMode === 'mercy';
   const drawStack = gameState.drawStack || 0;
   const pendingDrawType = gameState.pendingDrawType;
+  const winner = gameState.winner;
+  const turnKey = `${gameState.currentPlayerIndex}:${topCard?.id || topCard?.value || 'start'}:${gameState.deckCount}`;
+
+  useEffect(() => {
+    setTurnSecondsLeft(60);
+    const started = Date.now();
+    const timer = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - started) / 1000);
+      setTurnSecondsLeft(Math.max(0, 60 - elapsed));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [turnKey]);
+
+  useAudioTurnAnnouncement({
+    announcer,
+    gameKey: 'uno',
+    turnKey,
+    playerName: currentPlayer?.name,
+    isMyTurn,
+    actionLabel: drawStack > 0 ? 'turn to stack or draw' : 'turn',
+    enabled: !winner,
+  });
+
+  useAudioTimeWarnings({
+    announcer,
+    gameKey: 'uno',
+    timerKey: turnKey,
+    secondsLeft: turnSecondsLeft,
+    thresholds: [30, 10],
+    enabled: !winner,
+  });
 
   const canPlayCard = (card) => {
     if (!isMyTurn) return false;
@@ -130,7 +164,6 @@ export default function UnoGame({ gameState, hand, playerId, roomCode, musicStat
   const otherPlayers = gameState.players?.filter(p => p.id !== playerId) || [];
   const myInfo = gameState.players?.find(p => p.id === playerId);
 
-  const winner = gameState.winner;
 
   // Mercy vote state
   const mercyTarget = gameState.mercyVoteTarget;

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import socket from '../socket';
 import Confetti from './Confetti';
+import { useAudioTimeWarnings, useGameAnnouncer } from '../hooks/useGameAnnouncer';
 
 const MAP_W = 1280;
 const MAP_H = 960;
@@ -192,13 +193,35 @@ export default function ActionGame({ gameState, playerId, roomCode, isHost }) {
   const [hitFlash, setHitFlash] = useState(0);
   const [killFeed, setKillFeed] = useState([]);
   const [respawnCountdown, setRespawnCountdown] = useState(0);
+  const [actionTimeRemaining, setActionTimeRemaining] = useState(gameState.timeRemaining || null);
   const respawnRef = useRef(null);
+  const announcer = useGameAnnouncer({ rate: 1.25 });
+
+  useAudioTimeWarnings({
+    announcer,
+    gameKey: 'action',
+    timerKey: `${gameState.id || roomCode}:${gameState.mode || gameState.actionMode || 'round'}`,
+    secondsLeft: Math.ceil((actionTimeRemaining || 0) / 20),
+    thresholds: [30, 10],
+    enabled: Boolean(actionTimeRemaining && !gameState.winner),
+  });
+
+  useEffect(() => {
+    if (!gameState.phase || gameState.phase === 'lobby') return;
+    announcer.speak(`Action game active. This is real time. Stay moving.`, `action:start:${roomCode}:${gameState.mode || gameState.actionMode || 'round'}`);
+  }, [announcer, gameState.phase, gameState.mode, gameState.actionMode, roomCode]);
+
+  useEffect(() => {
+    if (!gameState.winner) return;
+    announcer.speak(`${gameState.winner} wins the action round.`, `action:winner:${roomCode}:${gameState.winner}`, { interrupt: true });
+  }, [announcer, gameState.winner, roomCode]);
 
   // Receive role reveal
   useEffect(() => {
     function onRole({ role }) {
       setMyRole(role);
       setRoleModal(role);
+      announcer.speak(`Your role is ${role}.`, `action:role:${roomCode}:${role}`, { interrupt: true });
       setTimeout(() => setRoleModal(null), 3000);
     }
     function onHit({ targetId, damage, hp }) {
@@ -214,6 +237,7 @@ export default function ActionGame({ gameState, playerId, roomCode, isHost }) {
       // Preserve player names across streaming updates
       snap.playerNames = stateRef.current?.playerNames || {};
       stateRef.current = snap;
+      if (typeof snap.timeRemaining === 'number') setActionTimeRemaining(snap.timeRemaining);
     }
     socket.on('action_role', onRole);
     socket.on('action_hit', onHit);
@@ -225,7 +249,7 @@ export default function ActionGame({ gameState, playerId, roomCode, isHost }) {
       socket.off('action_killed', onKilled);
       socket.off('action_state', onActionState);
     };
-  }, [playerId]);
+  }, [playerId, announcer, roomCode]);
 
   // Sync gameState into stateRef when it arrives via game_state (initial state)
   useEffect(() => {

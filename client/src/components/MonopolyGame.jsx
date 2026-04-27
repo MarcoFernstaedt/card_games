@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import socket from '../socket';
 import Confetti from './Confetti';
+import { useAudioTimeWarnings, useAudioTurnAnnouncement, useGameAnnouncer } from '../hooks/useGameAnnouncer';
 
 // Player token colors
 const TOKEN_COLORS = ['#7c6bff', '#e94560', '#00c896', '#ffab00', '#00b4ff', '#ff6b6b'];
@@ -219,11 +220,44 @@ export default function MonopolyGame({ gameState, playerId, roomCode, isHost }) 
   const [chanceCard, setChanceCard] = useState(null);
   const [selectedSpace, setSelectedSpace] = useState(null);
   const [prevDice, setPrevDice] = useState([0, 0]);
+  const [turnSecondsLeft, setTurnSecondsLeft] = useState(60);
+  const announcer = useGameAnnouncer({ rate: 1.18 });
 
   const myPlayer = gameState.players?.find(p => p.id === playerId);
   const currentPlayer = gameState.players?.[gameState.currentPlayerIndex];
   const isMyTurn = currentPlayer?.id === playerId;
   const board = gameState.board || [];
+  const decisionSpace = gameState.pendingDecision?.space;
+  const turnKey = `${gameState.currentPlayerIndex}:${gameState.phase}:${decisionSpace?.id ?? 'roll'}:${gameState.lastRoll?.join?.('-') || 'none'}`;
+
+  useEffect(() => {
+    setTurnSecondsLeft(60);
+    const started = Date.now();
+    const timer = setInterval(() => {
+      const elapsed = Math.floor((Date.now() - started) / 1000);
+      setTurnSecondsLeft(Math.max(0, 60 - elapsed));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [turnKey]);
+
+  useAudioTurnAnnouncement({
+    announcer,
+    gameKey: 'monopoly',
+    turnKey,
+    playerName: currentPlayer?.name,
+    isMyTurn,
+    actionLabel: gameState.pendingDecision ? `decision on ${decisionSpace?.name || 'property'}` : 'turn to roll',
+    enabled: !gameState.winner,
+  });
+
+  useAudioTimeWarnings({
+    announcer,
+    gameKey: 'monopoly',
+    timerKey: turnKey,
+    secondsLeft: turnSecondsLeft,
+    thresholds: [30, 10],
+    enabled: !gameState.winner,
+  });
 
   // Detect chance card from last state
   useEffect(() => {

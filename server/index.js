@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { Server } = require('socket.io');
 const { createGameState: createUnoState, playCard, drawCard, mercyVote } = require('./games/uno');
-const { createGameState: createCahState, submitResponse, czarPick, voteForWinner, nextRound, addCustomCard } = require('./games/cah');
+const { createGameState: createCahState, submitResponse, voteForWinner, nextRound, addCustomCard } = require('./games/cah');
 const { createGameState: createMonopolyState, doRoll, buyProperty, passProperty, mortgageProperty, getNetWorth } = require('./games/monopoly');
 const { createGameState: createActionState, applyInputs, resolveBullets, resolveRespawns, resolvePickups, checkWinCondition, getPublicSnapshot } = require('./games/action');
 const { activityReport, recordActivity, shouldTrackPageHit } = require('./activity');
@@ -56,15 +56,12 @@ function publicUnoState(room) {
 
 function publicCahState(room) {
   const gs = room.gameState;
-  const czarId = null;
   return {
     id: room.id,
     gameType: 'cah',
     host: room.host,
     phase: gs.phase,
     currentBlackCard: gs.currentBlackCard,
-    czarIndex: gs.czarIndex,
-    czarId,
     submittedIds: Object.keys(gs.submissions),
     votedIds: Object.keys(gs.votes || {}),
     votes: gs.phase === 'results' ? gs.votes : null,
@@ -198,11 +195,6 @@ function removePlayer(room, code, player) {
     if (room.gameType === 'cah') {
       delete gs.submissions[leavingId];
 
-      if (idx < gs.czarIndex) {
-        gs.czarIndex = gs.czarIndex - 1;
-      } else if (idx === gs.czarIndex) {
-        gs.czarIndex = gs.czarIndex % room.players.length;
-      }
 
       if (gs.phase === 'playing' && room.players.length > 1) {
         if (room.players.length > 0 && room.players.every(p => gs.submissions[p.id])) {
@@ -515,19 +507,6 @@ io.on('connection', socket => {
     if (!player) return;
 
     const result = voteForWinner(room.gameState, player.id, winnerId, room.players);
-    if (result.error) { socket.emit('error', { message: result.error }); return; }
-
-    io.to(code).emit('game_state', getPublicState(room));
-  });
-
-  socket.on('cah_czar_pick', ({ code, winnerId }) => {
-    const room = rooms[code];
-    if (!room || !room.gameState || room.gameType !== 'cah') return;
-
-    const player = room.players.find(p => p.socketId === socket.id);
-    if (!player || player.id !== room.host) { socket.emit('error', { message: 'Only the host can force-pick a winner' }); return; }
-
-    const result = czarPick(room.gameState, winnerId);
     if (result.error) { socket.emit('error', { message: result.error }); return; }
 
     io.to(code).emit('game_state', getPublicState(room));
