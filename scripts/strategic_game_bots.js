@@ -5,6 +5,24 @@ const { io } = require('../client/node_modules/socket.io-client');
 
 const REPO = path.resolve(__dirname, '..');
 const DEFAULT_URL = process.env.CARD_GAMES_URL || 'http://127.0.0.1:4321';
+const DEFAULT_BOT_NAMES = [
+  'Imperator',
+  'Atlas',
+  'Vega',
+  'Orion',
+  'Nova',
+  'Titan',
+  'Ranger',
+  'Maverick',
+  'Phoenix',
+  'Sentinel',
+];
+
+function botNameFromPool(index) {
+  const configured = (process.env.BOT_NAME_POOL || '').split(',').map((name) => name.trim()).filter(Boolean);
+  const pool = configured.length ? configured : DEFAULT_BOT_NAMES;
+  return pool[index % pool.length];
+}
 
 function wait(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 function once(sock, event, ms = 15000) {
@@ -240,10 +258,10 @@ async function joinUnoRoomBots() {
   const code = (process.env.CODE || process.argv[3] || '').toUpperCase();
   if (!code) throw new Error('CODE required');
   const count = Math.max(1, Number(process.env.BOT_COUNT || process.env.COUNT || process.argv[4] || 1));
-  const baseName = process.env.NAME_PREFIX || process.env.NAME || 'ImperatorAI';
+  const baseName = process.env.NAME_PREFIX || process.env.NAME || '';
   const url = process.env.URL || DEFAULT_URL;
   const bots = Array.from({ length: count }, (_, i) => {
-    const name = count === 1 ? baseName : `${baseName}${i + 1}`;
+    const name = baseName ? (count === 1 ? baseName : `${baseName}${i + 1}`) : botNameFromPool(i);
     return new Bot(name, url, code);
   });
   await Promise.all(bots.map((bot) => bot.connect()));

@@ -6,6 +6,7 @@ export default function Lobby({ gameState, roomCode, playerId, playerName, setPl
   const [view, setView] = useState('home');
   const [joinCode, setJoinCode] = useState('');
   const [savedSession, setSavedSession] = useState(null);
+  const [copyStatus, setCopyStatus] = useState('');
 
   useEffect(() => {
     try {
@@ -49,6 +50,13 @@ export default function Lobby({ gameState, roomCode, playerId, playerName, setPl
     setSavedSession(null);
   }
 
+  async function copyRoomCode() {
+    if (!roomCode) return;
+    await navigator.clipboard.writeText(roomCode);
+    setCopyStatus('Copied');
+    window.setTimeout(() => setCopyStatus(''), 1800);
+  }
+
   function handleDismissRejoin() {
     localStorage.removeItem('cg_session');
     setSavedSession(null);
@@ -65,7 +73,17 @@ export default function Lobby({ gameState, roomCode, playerId, playerName, setPl
         <div className="lobby-card">
           <div className="room-code-display">
             <div className="label">Room Code</div>
-            <div className="code">{roomCode}</div>
+            <div className="code-copy-row">
+              <div className="code">{roomCode}</div>
+              <button
+                type="button"
+                className="copy-room-code"
+                aria-label={`Copy room code ${roomCode}`}
+                onClick={copyRoomCode}
+              >
+                {copyStatus || 'Copy Code'}
+              </button>
+            </div>
             <div className="hint">Share this with up to 5 friends</div>
           </div>
 
