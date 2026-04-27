@@ -74,15 +74,16 @@ class Bot {
     this.lastActionKey = '';
     this.lastActionAt = 0;
     this.stopped = false;
+    this.hasJoinedRoom = false;
     this.socket = io(url, { transports: ['websocket', 'polling'], timeout: 8000, forceNew: true, reconnection: true });
-    this.socket.on('room_joined', (p) => { this.id = p.playerId || this.pid; this.code = p.code || this.code; });
-    this.socket.on('room_created', (p) => { this.id = p.playerId || this.pid; this.code = p.code || this.code; });
+    this.socket.on('room_joined', (p) => { this.id = p.playerId || this.pid; this.code = p.code || this.code; this.hasJoinedRoom = true; });
+    this.socket.on('room_created', (p) => { this.id = p.playerId || this.pid; this.code = p.code || this.code; this.hasJoinedRoom = true; });
     this.socket.on('hand_update', (p) => { this.hand = p.hand || []; this.act(); });
     this.socket.on('game_state', (s) => { this.state = s; this.act(); });
     this.socket.on('action_state', (s) => { this.state = { ...(this.state || {}), ...s, gameType: 'action', actionMode: s.mode }; this.act(); });
     this.socket.on('action_role', (p) => { this.role = p.role; });
     this.socket.on('error', () => { this.lastActionKey = ''; this.lastActionAt = 0; });
-    this.socket.on('connect', () => { if (this.code && this.id) this.socket.emit('rejoin_room', { code: this.code, pid: this.id }); });
+    this.socket.on('connect', () => { if (this.hasJoinedRoom && this.code && this.id) this.socket.emit('rejoin_room', { code: this.code, pid: this.id }); });
   }
   async connect() { await once(this.socket, 'connect'); }
   close() { this.stopped = true; this.socket.close(); }
@@ -235,15 +236,32 @@ async function runSuite() {
     server.kill('SIGTERM');
   }
 }
-async function joinUnoRoom() {
+async function joinUnoRoomBots() {
   const code = (process.env.CODE || process.argv[3] || '').toUpperCase();
   if (!code) throw new Error('CODE required');
-  const name = process.env.NAME || 'ImperatorAI';
-  const bot = new Bot(name, process.env.URL || 'http://127.0.0.1:3001', code);
-  await bot.connect();
-  bot.socket.emit('join_room', { name, code, pid: bot.pid });
-  bot.socket.on('game_over', payload => console.log('GAME_OVER', JSON.stringify(payload)));
-  console.log(`JOINED_BOT_READY code=${code} name=${name} pid=${bot.pid}`);
+  const count = Math.max(1, Number(process.env.BOT_COUNT || process.env.COUNT || process.argv[4] || 1));
+  const baseName = process.env.NAME_PREFIX || process.env.NAME || 'ImperatorAI';
+  const url = process.env.URL || DEFAULT_URL;
+  const bots = Array.from({ length: count }, (_, i) => {
+    const name = count === 1 ? baseName : `${baseName}${i + 1}`;
+    return new Bot(name, url, code);
+  });
+  await Promise.all(bots.map((bot) => bot.connect()));
+  const joinedBots = bots.map((bot) => {
+    const joinedP = once(bot.socket, 'room_joined', 20000);
+    bot.socket.emit('join_room', { name: bot.name, code, pid: bot.pid });
+    return joinedP.then((joined) => {
+      bot.code = joined.code || code;
+      bot.id = joined.playerId || bot.pid;
+      console.log('JOINED_ROOM', JSON.stringify({ code: bot.code, name: bot.name, playerId: bot.id, pid: bot.pid }));
+      return bot;
+    });
+  });
+  await Promise.all(joinedBots.map((joined) => joined));
+  for (const bot of bots) {
+    bot.socket.on('game_over', payload => console.log('GAME_OVER', JSON.stringify({ name: bot.name, payload })));
+  }
+  console.log('JOINED_BOTS_READY', JSON.stringify({ code, count, names: bots.map((bot) => bot.name), url }));
 }
 (async () => {
   const cmd = process.argv[2] || 'suite';
@@ -251,7 +269,7 @@ async function joinUnoRoom() {
     const results = await runSuite();
     console.log('BOT_SUITE_OK', JSON.stringify({ count: results.length, results }, null, 2));
   } else if (cmd === 'join-uno') {
-    await joinUnoRoom();
+    await joinUnoRoomBots();
     setInterval(() => {}, 1000);
   } else {
     throw new Error(`unknown command ${cmd}`);
