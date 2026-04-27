@@ -70,14 +70,26 @@ function ColorPicker({ onPick }) {
 
 export default function UnoGame({ gameState, hand, playerId, roomCode, musicState, isHost }) {
   const [pendingWild, setPendingWild] = useState(null);
+  const [mercyVoteNotice, setMercyVoteNotice] = useState(null);
 
   const myPlayerIndex = gameState.players?.findIndex(p => p.id === playerId);
   const isMyTurn = gameState.currentPlayerIndex === myPlayerIndex;
   const currentPlayer = gameState.players?.[gameState.currentPlayerIndex];
   const topCard = gameState.topCard;
+  const isMercyMode = gameState.unoMode === 'mercy';
+  const drawStack = gameState.drawStack || 0;
+  const pendingDrawType = gameState.pendingDrawType;
 
   const canPlayCard = (card) => {
     if (!isMyTurn) return false;
+
+    // Mercy mode stacking: when a draw stack is pending, only the right draw card type is playable
+    if (isMercyMode && drawStack > 0) {
+      if (pendingDrawType === 'draw_two') return card.value === 'draw_two';
+      if (pendingDrawType === 'wild_draw_four') return card.value === 'wild_draw_four';
+      return false;
+    }
+
     if (card.color === 'wild') return true;
     if (card.color === gameState.currentColor) return true;
     if (topCard && card.value === topCard.value) return true;
@@ -109,10 +121,30 @@ export default function UnoGame({ gameState, hand, playerId, roomCode, musicStat
     socket.emit('uno_draw_card', { code: roomCode });
   }
 
+  function handleMercyVote(targetId) {
+    socket.emit('uno_mercy_vote', { code: roomCode, targetPlayerId: targetId });
+    setMercyVoteNotice(targetId);
+    setTimeout(() => setMercyVoteNotice(null), 3000);
+  }
+
   const otherPlayers = gameState.players?.filter(p => p.id !== playerId) || [];
   const myInfo = gameState.players?.find(p => p.id === playerId);
 
   const winner = gameState.winner;
+
+  // Mercy vote state
+  const mercyTarget = gameState.mercyVoteTarget;
+  const mercyVotes = gameState.mercyVotes || {};
+  const mercyTargetPlayer = gameState.players?.find(p => p.id === mercyTarget);
+  const myVoteForTarget = mercyVotes[playerId] === mercyTarget;
+  const voteCount = Object.values(mercyVotes).filter(v => v === mercyTarget).length;
+  const eligibleVoters = (gameState.players?.length || 1) - 1;
+  const threshold = Math.ceil(eligibleVoters / 2);
+
+  // Players eligible for mercy votes (15+ cards, not me)
+  const mercyCandidates = isMercyMode
+    ? (gameState.players?.filter(p => p.id !== playerId && p.cardCount >= 15) || [])
+    : [];
 
   return (
     <div className="uno-game">
@@ -126,9 +158,42 @@ export default function UnoGame({ gameState, hand, playerId, roomCode, musicStat
             {myInfo?.name?.charAt(0).toUpperCase() || '?'}
           </div>
           <span style={{ fontWeight: 700, fontSize: '0.9rem' }}>{myInfo?.name || 'You'}</span>
+          {isMercyMode && (
+            <span style={{ fontSize: '0.7rem', background: 'rgba(233,69,96,0.15)', color: 'var(--accent2)', borderRadius: 4, padding: '2px 6px', fontWeight: 700 }}>
+              MERCY
+            </span>
+          )}
         </div>
         <span style={{ fontSize: '0.75rem', color: 'var(--muted)' }}>Room: <strong style={{ color: 'var(--accent)', letterSpacing: 2 }}>{roomCode}</strong></span>
       </div>
+
+      {/* Draw stack alert (Mercy mode) */}
+      {isMercyMode && drawStack > 0 && (
+        <div style={{
+          background: 'rgba(233,69,96,0.15)', border: '1px solid var(--accent2)',
+          borderRadius: 8, margin: '8px 14px', padding: '10px 14px',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        }}>
+          <div>
+            <div style={{ fontWeight: 800, fontSize: '1.1rem', color: 'var(--accent2)' }}>
+              Stack: +{drawStack}
+            </div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--muted)', marginTop: 2 }}>
+              {isMyTurn
+                ? `Stack a ${pendingDrawType === 'draw_two' ? '+2' : '+4'} to pass it on, or draw ${drawStack} cards`
+                : `Next player must stack a ${pendingDrawType === 'draw_two' ? '+2' : '+4'} or draw ${drawStack}`}
+            </div>
+          </div>
+          {isMyTurn && (
+            <button
+              onClick={handleDraw}
+              style={{ background: 'var(--accent2)', color: '#fff', border: 'none', borderRadius: 6, padding: '6px 12px', fontWeight: 700, cursor: 'pointer', fontSize: '0.8rem' }}
+            >
+              Draw {drawStack}
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Other players */}
       <div className="uno-players-bar">
@@ -139,9 +204,38 @@ export default function UnoGame({ gameState, hand, playerId, roomCode, musicStat
               {p.cardCount}
             </div>
             {p.cardCount === 1 && <div className="uno-flag">UNO!</div>}
+            {isMercyMode && p.cardCount >= 15 && (
+              <div style={{ fontSize: '0.65rem', color: 'var(--accent2)', fontWeight: 700 }}>MANY</div>
+            )}
           </div>
         ))}
       </div>
+
+      {/* Mercy vote active banner */}
+      {isMercyMode && mercyTarget && mercyTargetPlayer && (
+        <div style={{
+          background: 'rgba(107,77,255,0.12)', border: '1px solid var(--accent)',
+          borderRadius: 8, margin: '0 14px 8px', padding: '10px 14px',
+        }}>
+          <div style={{ fontWeight: 700, fontSize: '0.85rem', marginBottom: 4 }}>
+            Mercy vote for {mercyTargetPlayer.name} ({voteCount}/{threshold} votes)
+          </div>
+          <div style={{ background: 'var(--surface)', borderRadius: 4, height: 6, overflow: 'hidden', marginBottom: 8 }}>
+            <div style={{ width: `${Math.min((voteCount / threshold) * 100, 100)}%`, background: 'var(--accent)', height: '100%', transition: 'width 0.3s' }} />
+          </div>
+          {!myVoteForTarget && mercyTarget !== playerId && (
+            <button
+              onClick={() => handleMercyVote(mercyTarget)}
+              style={{ background: 'var(--accent)', color: '#fff', border: 'none', borderRadius: 6, padding: '5px 12px', fontWeight: 700, cursor: 'pointer', fontSize: '0.78rem' }}
+            >
+              Vote Mercy
+            </button>
+          )}
+          {myVoteForTarget && (
+            <span style={{ fontSize: '0.78rem', color: 'var(--muted)' }}>You voted</span>
+          )}
+        </div>
+      )}
 
       {/* Board */}
       <div className="uno-board">
@@ -174,11 +268,11 @@ export default function UnoGame({ gameState, hand, playerId, roomCode, musicStat
             <div className="pile-label">Draw Pile</div>
             <div
               className="deck-pile"
-              onClick={isMyTurn ? handleDraw : undefined}
-              style={!isMyTurn ? { opacity: 0.5, cursor: 'default' } : {}}
+              onClick={isMyTurn && !(isMercyMode && drawStack > 0) ? handleDraw : undefined}
+              style={!isMyTurn || (isMercyMode && drawStack > 0) ? { opacity: 0.5, cursor: 'default' } : {}}
             >
               <div className="deck-count">{gameState.deckCount}</div>
-              <div className="deck-label">{isMyTurn ? 'Tap to draw' : 'cards left'}</div>
+              <div className="deck-label">{isMyTurn && !(isMercyMode && drawStack > 0) ? 'Tap to draw' : 'cards left'}</div>
             </div>
           </div>
         </div>
@@ -192,6 +286,26 @@ export default function UnoGame({ gameState, hand, playerId, roomCode, musicStat
           </div>
         )}
       </div>
+
+      {/* Mercy vote candidates */}
+      {isMercyMode && mercyCandidates.length > 0 && !mercyTarget && (
+        <div style={{ padding: '0 14px 8px' }}>
+          {mercyCandidates.map(p => (
+            <button
+              key={p.id}
+              onClick={() => handleMercyVote(p.id)}
+              disabled={mercyVoteNotice === p.id}
+              style={{
+                background: 'rgba(107,77,255,0.1)', border: '1px solid var(--accent)',
+                color: 'var(--accent)', borderRadius: 6, padding: '5px 10px',
+                fontSize: '0.75rem', cursor: 'pointer', marginRight: 6,
+              }}
+            >
+              {mercyVoteNotice === p.id ? 'Voted!' : `Show mercy to ${p.name} (${p.cardCount} cards)`}
+            </button>
+          ))}
+        </div>
+      )}
 
       <MusicControls roomCode={roomCode} isHost={isHost} musicState={musicState} />
 

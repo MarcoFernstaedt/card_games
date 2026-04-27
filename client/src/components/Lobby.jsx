@@ -23,7 +23,7 @@ export default function Lobby({ gameState, roomCode, playerId, playerName, setPl
 
   function handleCreate() {
     if (!playerName.trim()) return;
-    socket.emit('create_room', { name: playerName.trim(), gameType: 'cah', pid });
+    socket.emit('create_room', { name: playerName.trim(), gameType: 'uno', unoMode: 'classic', pid });
   }
 
   function handleJoin() {
@@ -37,6 +37,10 @@ export default function Lobby({ gameState, roomCode, playerId, playerName, setPl
 
   function handleGameTypeChange(type) {
     socket.emit('change_game_type', { code: roomCode, gameType: type });
+  }
+
+  function handleUnoModeChange(mode) {
+    socket.emit('change_uno_mode', { code: roomCode, unoMode: mode });
   }
 
   function handleRejoin() {
@@ -67,7 +71,7 @@ export default function Lobby({ gameState, roomCode, playerId, playerName, setPl
 
           {isHost && (
             <>
-              <div className="section-label" style={{ margin: '0 0 8px' }}>Game Mode</div>
+              <div className="section-label" style={{ margin: '0 0 8px' }}>Game</div>
               <div className="game-type-toggle">
                 <button
                   className={`game-type-btn ${gameState.gameType === 'cah' ? 'active' : ''}`}
@@ -81,14 +85,77 @@ export default function Lobby({ gameState, roomCode, playerId, playerName, setPl
                 >
                   🎴 UNO
                 </button>
+                <button
+                  className={`game-type-btn ${gameState.gameType === 'monopoly' ? 'active' : ''}`}
+                  onClick={() => handleGameTypeChange('monopoly')}
+                >
+                  🎲 Monopoly
+                </button>
+                <button
+                  className={`game-type-btn ${gameState.gameType === 'action' ? 'active' : ''}`}
+                  onClick={() => handleGameTypeChange('action')}
+                >
+                  🔫 Action
+                </button>
               </div>
+
+              {gameState.gameType === 'uno' && (
+                <>
+                  <div className="section-label" style={{ margin: '10px 0 8px' }}>UNO Rules</div>
+                  <div className="game-type-toggle">
+                    <button
+                      className={`game-type-btn ${(gameState.unoMode || 'classic') === 'classic' ? 'active' : ''}`}
+                      onClick={() => handleUnoModeChange('classic')}
+                    >
+                      Classic
+                    </button>
+                    <button
+                      className={`game-type-btn ${gameState.unoMode === 'mercy' ? 'active' : ''}`}
+                      onClick={() => handleUnoModeChange('mercy')}
+                    >
+                      Mercy
+                    </button>
+                  </div>
+                  {gameState.unoMode === 'mercy' && (
+                    <div style={{ fontSize: '0.75rem', color: 'var(--muted)', marginTop: 6, lineHeight: 1.4 }}>
+                      Stack +2/+4 cards to pass penalties. Players with 15+ cards can be shown mercy.
+                    </div>
+                  )}
+                </>
+              )}
+
+              {gameState.gameType === 'action' && (
+                <>
+                  <div className="section-label" style={{ margin: '10px 0 8px' }}>Mode</div>
+                  <div className="game-type-toggle">
+                    <button
+                      className={`game-type-btn ${(gameState.actionMode || 'impostor') === 'impostor' ? 'active' : ''}`}
+                      onClick={() => socket.emit('change_action_mode', { code: roomCode, actionMode: 'impostor' })}
+                    >
+                      Impostor
+                    </button>
+                    <button
+                      className={`game-type-btn ${gameState.actionMode === 'firefight' ? 'active' : ''}`}
+                      onClick={() => socket.emit('change_action_mode', { code: roomCode, actionMode: 'firefight' })}
+                    >
+                      Firefight
+                    </button>
+                  </div>
+                </>
+              )}
             </>
           )}
 
           {!isHost && (
             <div className="cah-status" style={{ marginBottom: 14 }}>
               <div className="status-dot" />
-              Game type: <strong style={{ marginLeft: 4 }}>{gameState.gameType === 'cah' ? 'Wild Cards' : 'UNO'}</strong>
+              Game: <strong style={{ marginLeft: 4 }}>
+                {gameState.gameType === 'cah' ? 'Wild Cards' :
+                 gameState.gameType === 'uno' ? `UNO (${gameState.unoMode === 'mercy' ? 'Mercy' : 'Classic'})` :
+                 gameState.gameType === 'monopoly' ? 'Monopoly' :
+                 gameState.gameType === 'action' ? `Action – ${gameState.actionMode === 'firefight' ? 'Firefight' : 'Impostor'}` :
+                 gameState.gameType}
+              </strong>
             </div>
           )}
 

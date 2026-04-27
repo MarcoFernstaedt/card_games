@@ -3,6 +3,8 @@ import socket, { pid } from './socket';
 import Lobby from './components/Lobby';
 import UnoGame from './components/UnoGame';
 import CahGame from './components/CahGame';
+import MonopolyGame from './components/MonopolyGame';
+import ActionGame from './components/ActionGame';
 import Confetti from './components/Confetti';
 import Particles from './components/Particles';
 
@@ -121,8 +123,18 @@ export default function App() {
     socket.on('game_over', data => {
       setGameOver(data);
       setShowConfetti(true);
-      setTimeout(() => setShowConfetti(false), 4000);
+      setTimeout(() => setShowConfetti(false), 5000);
       localStorage.removeItem('cg_session');
+    });
+
+    socket.on('monopoly_dice_rolled', ({ dice, playerId: rollerId }) => {
+      // Dice animation handled inside MonopolyGame via gameState diff
+    });
+
+    socket.on('mercy_vote_update', data => {
+      if (data.passed) {
+        // No additional handling needed; game_state covers it
+      }
     });
 
     socket.on('player_left', ({ playerName: name }) => {
@@ -158,6 +170,8 @@ export default function App() {
       socket.off('player_rejoined');
       socket.off('custom_card_added');
       socket.off('music_state');
+      socket.off('monopoly_dice_rolled');
+      socket.off('mercy_vote_update');
     };
   }, []);
 
@@ -182,6 +196,13 @@ export default function App() {
   }
 
   if (gameOver) {
+    const gameType = gameState?.gameType;
+    const subtitle =
+      gameType === 'monopoly' ? (gameOver.reason === 'time_limit' ? 'Monopoly — Time Up!' : 'Monopoly Champion!') :
+      gameType === 'action' ? (gameState?.actionMode === 'firefight' ? 'Firefight MVP!' : 'Impostor Showdown!') :
+      gameType === 'uno' ? 'UNO Champion!' :
+      'Game Over!';
+
     return (
       <div className="game-over-screen">
         <Particles mode="victory" />
@@ -191,16 +212,16 @@ export default function App() {
           {gameOver.winnerName ? (
             <>
               <h1>{gameOver.winnerName} Wins!</h1>
-              <p>UNO Champion</p>
+              <p>{subtitle}</p>
             </>
           ) : (
             <>
               <h1>Game Over!</h1>
               <div className="score-list">
-                {[...(gameState?.players || [])].sort((a, b) => (gameOver.scores[b.id] || 0) - (gameOver.scores[a.id] || 0)).map(p => (
+                {[...(gameState?.players || [])].sort((a, b) => (gameOver.scores?.[b.id] || 0) - (gameOver.scores?.[a.id] || 0)).map(p => (
                   <div key={p.id} className="score-row">
                     <span>{p.name}</span>
-                    <span className="score-pts">{gameOver.scores[p.id] || 0} pts</span>
+                    <span className="score-pts">{gameOver.scores?.[p.id] || 0} pts</span>
                   </div>
                 ))}
               </div>
@@ -244,6 +265,20 @@ export default function App() {
             playerId={playerId}
             roomCode={roomCode}
             musicState={musicState}
+            isHost={isHost}
+          />
+        ) : gameState.gameType === 'monopoly' ? (
+          <MonopolyGame
+            gameState={gameState}
+            playerId={playerId}
+            roomCode={roomCode}
+            isHost={isHost}
+          />
+        ) : gameState.gameType === 'action' ? (
+          <ActionGame
+            gameState={gameState}
+            playerId={playerId}
+            roomCode={roomCode}
             isHost={isHost}
           />
         ) : (
