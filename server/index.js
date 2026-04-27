@@ -3,8 +3,10 @@ const http = require('http');
 const path = require('path');
 const fs = require('fs');
 const { Server } = require('socket.io');
-const { createGameState: createUnoState, playCard, drawCard } = require('./games/uno');
+const { createGameState: createUnoState, playCard, drawCard, mercyVote } = require('./games/uno');
 const { createGameState: createCahState, submitResponse, czarPick, voteForWinner, nextRound, addCustomCard } = require('./games/cah');
+const { createGameState: createMonopolyState, doRoll, buyProperty, passProperty, mortgageProperty, getNetWorth } = require('./games/monopoly');
+const { createGameState: createActionState, applyInputs, resolveBullets, resolveRespawns, resolvePickups, checkWinCondition, getPublicSnapshot } = require('./games/action');
 
 const app = express();
 const server = http.createServer(app);
@@ -28,6 +30,7 @@ function publicUnoState(room) {
   return {
     id: room.id,
     gameType: 'uno',
+    unoMode: gs.unoMode,
     host: room.host,
     phase: gs.winner ? 'finished' : 'playing',
     currentPlayerIndex: gs.currentPlayerIndex,
@@ -36,6 +39,10 @@ function publicUnoState(room) {
     topCard: gs.discardPile[gs.discardPile.length - 1],
     deckCount: gs.deck.length,
     winner: gs.winner,
+    drawStack: gs.drawStack,
+    pendingDrawType: gs.pendingDrawType,
+    mercyVotes: gs.mercyVotes,
+    mercyVoteTarget: gs.mercyVoteTarget,
     players: room.players.map((p, i) => ({
       id: p.id,
       name: p.name,
@@ -78,15 +85,65 @@ function lobbyState(room) {
   return {
     id: room.id,
     gameType: room.gameType,
+    unoMode: room.unoMode,
+    actionMode: room.actionMode,
     host: room.host,
     phase: 'lobby',
     players: room.players.map(p => ({ id: p.id, name: p.name, disconnected: p.disconnected || false })),
   };
 }
 
+function publicMonopolyState(room) {
+  const gs = room.gameState;
+  return {
+    id: room.id,
+    gameType: 'monopoly',
+    host: room.host,
+    phase: gs.phase,
+    currentPlayerIndex: gs.currentPlayerIndex,
+    board: gs.board,
+    players: room.players.map(p => ({
+      id: p.id,
+      name: p.name,
+      disconnected: p.disconnected || false,
+      ...gs.players[p.id],
+    })),
+    dice: gs.dice,
+    lastRoll: gs.lastRoll,
+    winner: gs.winner,
+    bankruptedOrder: gs.bankruptedOrder,
+    pendingDecision: gs.pendingDecision,
+    timeLimit: gs.timeLimit,
+    elapsedTime: gs.elapsedTime,
+  };
+}
+
 function getPublicState(room) {
   if (!room.gameState) return lobbyState(room);
-  return room.gameType === 'uno' ? publicUnoState(room) : publicCahState(room);
+  if (room.gameType === 'uno') return publicUnoState(room);
+  if (room.gameType === 'monopoly') return publicMonopolyState(room);
+  if (room.gameType === 'action') {
+    const snap = getPublicSnapshot(room.gameState);
+    return {
+      gameType: 'action',
+      actionMode: room.actionMode,
+      host: room.host,
+      phase: room.gameState.phase,
+      id: room.id,
+      // players = roster array (for routing/display); playerStates = in-game positions
+      players: room.players.map(p => ({ id: p.id, name: p.name, disconnected: p.disconnected || false })),
+      playerStates: snap.players,
+      bullets: snap.bullets,
+      tasks: snap.tasks,
+      pickups: snap.pickups,
+      completedTasks: snap.completedTasks,
+      totalTasks: snap.totalTasks,
+      timeRemaining: snap.timeRemaining,
+      winner: snap.winner,
+      mode: snap.mode,
+    };
+  }
+  return publicCahState(room);
 }
 
 function sendHands(room) {
@@ -108,7 +165,12 @@ function removePlayer(room, code, player) {
   const leavingId = player.id;
   room.players.splice(idx, 1);
 
-  if (room.players.length === 0) { delete rooms[code]; return; }
+  if (room.players.length === 0) {
+    delete rooms[code];
+    if (monopolyTimers[code]) { clearInterval(monopolyTimers[code]); delete monopolyTimers[code]; }
+    if (actionLoops[code]) { clearInterval(actionLoops[code]); delete actionLoops[code]; }
+    return;
+  }
   if (room.host === leavingId) room.host = room.players[0].id;
 
   if (room.gameState) {
@@ -155,13 +217,89 @@ function removePlayer(room, code, player) {
   io.to(code).emit('game_state', getPublicState(room));
 }
 
+const monopolyTimers = {};
+const actionLoops = {};
+
+function startMonopolyTimer(code, room) {
+  if (monopolyTimers[code]) clearInterval(monopolyTimers[code]);
+  monopolyTimers[code] = setInterval(() => {
+    const r = rooms[code];
+    if (!r || !r.gameState || r.gameType !== 'monopoly') {
+      clearInterval(monopolyTimers[code]);
+      delete monopolyTimers[code];
+      return;
+    }
+    r.gameState.elapsedTime += 1;
+    if (r.gameState.elapsedTime >= r.gameState.timeLimit) {
+      clearInterval(monopolyTimers[code]);
+      delete monopolyTimers[code];
+      // Richest player wins at time limit
+      let bestId = null, bestWorth = -1;
+      for (const p of r.players) {
+        const worth = getNetWorth(r.gameState, p.id);
+        if (worth > bestWorth) { bestWorth = worth; bestId = p.id; }
+      }
+      r.gameState.winner = bestId;
+      r.gameState.phase = 'finished';
+      const winnerName = r.players.find(p => p.id === bestId)?.name;
+      io.to(code).emit('game_state', getPublicState(r));
+      io.to(code).emit('game_over', { winner: bestId, winnerName, reason: 'time_limit' });
+    }
+  }, 1000);
+}
+
+function startActionLoop(code) {
+  if (actionLoops[code]) clearInterval(actionLoops[code]);
+  actionLoops[code] = setInterval(() => {
+    const room = rooms[code];
+    if (!room || !room.gameState || room.gameType !== 'action') {
+      clearInterval(actionLoops[code]);
+      delete actionLoops[code];
+      return;
+    }
+    const gs = room.gameState;
+
+    applyInputs(gs, gs.inputQueue);
+    gs.inputQueue = {};
+
+    const hits = resolveBullets(gs, room.players);
+    resolveRespawns(gs);
+
+    if (gs.mode === 'firefight') {
+      resolvePickups(gs);
+      if (gs.timeRemaining > 0) gs.timeRemaining -= 1;
+    }
+
+    if (hits.length > 0) {
+      for (const hit of hits) {
+        io.to(code).emit('action_hit', hit);
+      }
+    }
+
+    const win = checkWinCondition(gs, room.players);
+    if (win) {
+      gs.winner = win;
+      gs.phase = 'finished';
+      clearInterval(actionLoops[code]);
+      delete actionLoops[code];
+      const winnerName = win.playerName || (win.side === 'crewmates' ? 'The Crewmates' : 'The Impostor');
+      io.to(code).emit('game_state', { gameType: 'action', actionMode: room.actionMode, ...getPublicSnapshot(gs) });
+      io.to(code).emit('game_over', { winner: win.playerId || null, winnerName });
+      return;
+    }
+
+    io.to(code).emit('action_state', getPublicSnapshot(gs));
+  }, 50); // 20 Hz
+}
+
 io.on('connection', socket => {
-  socket.on('create_room', ({ name, gameType, pid }) => {
+  socket.on('create_room', ({ name, gameType, unoMode, pid }) => {
     const code = generateCode();
     const playerId = pid || socket.id;
     rooms[code] = {
       id: code,
       gameType: gameType || 'uno',
+      unoMode: unoMode || 'classic',
       host: playerId,
       players: [{ id: playerId, name, socketId: socket.id, disconnected: false }],
       gameState: null,
@@ -224,6 +362,46 @@ io.on('connection', socket => {
     io.to(code).emit('game_state', getPublicState(room));
   });
 
+  socket.on('change_uno_mode', ({ code, unoMode }) => {
+    const room = rooms[code];
+    if (!room || room.gameState) return;
+    const player = room.players.find(p => p.socketId === socket.id);
+    if (!player || player.id !== room.host) return;
+    if (!['classic', 'mercy'].includes(unoMode)) return;
+    room.unoMode = unoMode;
+    io.to(code).emit('game_state', getPublicState(room));
+  });
+
+  socket.on('change_action_mode', ({ code, actionMode }) => {
+    const room = rooms[code];
+    if (!room || room.gameState) return;
+    const player = room.players.find(p => p.socketId === socket.id);
+    if (!player || player.id !== room.host) return;
+    if (!['impostor', 'firefight'].includes(actionMode)) return;
+    room.actionMode = actionMode;
+    io.to(code).emit('game_state', getPublicState(room));
+  });
+
+  socket.on('uno_mercy_vote', ({ code, targetPlayerId }) => {
+    const room = rooms[code];
+    if (!room || !room.gameState || room.gameType !== 'uno') return;
+    const player = room.players.find(p => p.socketId === socket.id);
+    if (!player) return;
+
+    const result = mercyVote(room.gameState, player.id, targetPlayerId, room.players);
+    if (result.error) { socket.emit('error', { message: result.error }); return; }
+
+    if (result.passed) sendHands(room);
+    io.to(code).emit('game_state', getPublicState(room));
+    io.to(code).emit('mercy_vote_update', {
+      passed: result.passed,
+      votes: result.votes,
+      threshold: result.threshold,
+      targetPlayerId,
+      removed: result.removed,
+    });
+  });
+
   socket.on('start_game', ({ code }) => {
     const room = rooms[code];
     if (!room) return;
@@ -231,9 +409,27 @@ io.on('connection', socket => {
     if (!player || player.id !== room.host) return;
     if (room.players.length < 2) { socket.emit('error', { message: 'Need at least 2 players' }); return; }
 
-    room.gameState = room.gameType === 'uno'
-      ? createUnoState(room.players)
-      : createCahState(room.players);
+    if (room.gameType === 'uno') {
+      room.gameState = createUnoState(room.players, room.unoMode || 'classic');
+    } else if (room.gameType === 'monopoly') {
+      room.gameState = createMonopolyState(room.players);
+      startMonopolyTimer(code, room);
+    } else if (room.gameType === 'action') {
+      const mode = room.actionMode || 'impostor';
+      room.gameState = createActionState(room.players, mode);
+      room.gameState.inputQueue = {};
+      // Send private roles in impostor mode
+      if (mode === 'impostor') {
+        for (const p of room.players) {
+          const sock = io.sockets.sockets.get(p.socketId);
+          const ps = room.gameState.players[p.id];
+          if (sock && ps) sock.emit('action_role', { role: ps.role });
+        }
+      }
+      startActionLoop(code);
+    } else {
+      room.gameState = createCahState(room.players);
+    }
 
     sendHands(room);
     io.to(code).emit('game_state', getPublicState(room));
@@ -367,6 +563,76 @@ io.on('connection', socket => {
     }
 
     io.to(code).emit('music_state', room.musicState);
+  });
+
+  socket.on('action_input', ({ code, dx, dy, angle, fire, interact }) => {
+    const room = rooms[code];
+    if (!room || !room.gameState || room.gameType !== 'action') return;
+    const player = room.players.find(p => p.socketId === socket.id);
+    if (!player) return;
+    // Queue the input for the next game loop tick
+    room.gameState.inputQueue[player.id] = { dx, dy, angle, fire, interact };
+  });
+
+  socket.on('monopoly_roll', ({ code }) => {
+    const room = rooms[code];
+    if (!room || !room.gameState || room.gameType !== 'monopoly') return;
+    const player = room.players.find(p => p.socketId === socket.id);
+    if (!player) return;
+    const playerIndex = room.players.indexOf(player);
+
+    const result = doRoll(room.gameState, playerIndex, room.players);
+    if (result.error) { socket.emit('error', { message: result.error }); return; }
+
+    io.to(code).emit('monopoly_dice_rolled', { dice: result.dice, playerId: player.id });
+    setTimeout(() => {
+      const r = rooms[code];
+      if (r) io.to(code).emit('game_state', getPublicState(r));
+    }, 800);
+
+    if (room.gameState.winner) {
+      const winnerName = room.players.find(p => p.id === room.gameState.winner)?.name;
+      io.to(code).emit('game_over', { winner: room.gameState.winner, winnerName });
+    }
+  });
+
+  socket.on('monopoly_buy', ({ code }) => {
+    const room = rooms[code];
+    if (!room || !room.gameState || room.gameType !== 'monopoly') return;
+    const player = room.players.find(p => p.socketId === socket.id);
+    if (!player) return;
+    const playerIndex = room.players.indexOf(player);
+
+    const result = buyProperty(room.gameState, playerIndex, room.players);
+    if (result.error) { socket.emit('error', { message: result.error }); return; }
+
+    io.to(code).emit('game_state', getPublicState(room));
+  });
+
+  socket.on('monopoly_pass', ({ code }) => {
+    const room = rooms[code];
+    if (!room || !room.gameState || room.gameType !== 'monopoly') return;
+    const player = room.players.find(p => p.socketId === socket.id);
+    if (!player) return;
+    const playerIndex = room.players.indexOf(player);
+
+    const result = passProperty(room.gameState, playerIndex, room.players);
+    if (result.error) { socket.emit('error', { message: result.error }); return; }
+
+    io.to(code).emit('game_state', getPublicState(room));
+  });
+
+  socket.on('monopoly_mortgage', ({ code, spaceId }) => {
+    const room = rooms[code];
+    if (!room || !room.gameState || room.gameType !== 'monopoly') return;
+    const player = room.players.find(p => p.socketId === socket.id);
+    if (!player) return;
+    const playerIndex = room.players.indexOf(player);
+
+    const result = mortgageProperty(room.gameState, playerIndex, spaceId, room.players);
+    if (result.error) { socket.emit('error', { message: result.error }); return; }
+
+    io.to(code).emit('game_state', getPublicState(room));
   });
 
   socket.on('disconnect', () => {

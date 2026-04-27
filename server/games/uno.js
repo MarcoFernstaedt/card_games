@@ -53,7 +53,7 @@ function getNextIndex(count, current, direction, skip = false) {
   return next;
 }
 
-function createGameState(players) {
+function createGameState(players, unoMode = 'classic') {
   const deck = createDeck();
   const hands = {};
 
@@ -73,6 +73,11 @@ function createGameState(players) {
     direction: 1,
     currentColor: startCard.color,
     winner: null,
+    unoMode,
+    drawStack: 0,
+    pendingDrawType: null,
+    mercyVotes: {},
+    mercyVoteTarget: null,
   };
 }
 
@@ -84,7 +89,17 @@ function playCard(gameState, playerIndex, cardIndex, chosenColor, players) {
   if (!card) return { error: 'Card not found' };
 
   const topCard = gameState.discardPile[gameState.discardPile.length - 1];
-  if (!canPlay(card, topCard, gameState.currentColor)) {
+
+  // Mercy mode stacking: when a draw stack is pending, only matching draw cards are allowed
+  if (gameState.unoMode === 'mercy' && gameState.drawStack > 0) {
+    const isDrawTwo = card.value === 'draw_two';
+    const isDrawFour = card.value === 'wild_draw_four';
+    const canStack = (gameState.pendingDrawType === 'draw_two' && isDrawTwo) ||
+                     (gameState.pendingDrawType === 'wild_draw_four' && isDrawFour);
+    if (!canStack) {
+      return { error: `Must stack a ${gameState.pendingDrawType === 'draw_two' ? '+2' : '+4'} or draw ${gameState.drawStack} cards` };
+    }
+  } else if (!canPlay(card, topCard, gameState.currentColor)) {
     return { error: 'Cannot play that card' };
   }
 
@@ -111,23 +126,36 @@ function playCard(gameState, playerIndex, cardIndex, chosenColor, players) {
       }
       break;
     case 'draw_two': {
-      const nextIdx = getNextIndex(count, playerIndex, gameState.direction);
-      const nextId = players[nextIdx].id;
-      for (let i = 0; i < 2; i++) {
-        if (gameState.deck.length === 0) reshuffleDeck(gameState);
-        gameState.hands[nextId].push(gameState.deck.pop());
+      if (gameState.unoMode === 'mercy') {
+        // Stack the draw instead of applying immediately
+        gameState.drawStack += 2;
+        gameState.pendingDrawType = 'draw_two';
+        skip = true;
+      } else {
+        const nextIdx = getNextIndex(count, playerIndex, gameState.direction);
+        const nextId = players[nextIdx].id;
+        for (let i = 0; i < 2; i++) {
+          if (gameState.deck.length === 0) reshuffleDeck(gameState);
+          gameState.hands[nextId].push(gameState.deck.pop());
+        }
+        skip = true;
       }
-      skip = true;
       break;
     }
     case 'wild_draw_four': {
-      const nextIdx = getNextIndex(count, playerIndex, gameState.direction);
-      const nextId = players[nextIdx].id;
-      for (let i = 0; i < 4; i++) {
-        if (gameState.deck.length === 0) reshuffleDeck(gameState);
-        gameState.hands[nextId].push(gameState.deck.pop());
+      if (gameState.unoMode === 'mercy') {
+        gameState.drawStack += 4;
+        gameState.pendingDrawType = 'wild_draw_four';
+        skip = true;
+      } else {
+        const nextIdx = getNextIndex(count, playerIndex, gameState.direction);
+        const nextId = players[nextIdx].id;
+        for (let i = 0; i < 4; i++) {
+          if (gameState.deck.length === 0) reshuffleDeck(gameState);
+          gameState.hands[nextId].push(gameState.deck.pop());
+        }
+        skip = true;
       }
-      skip = true;
       break;
     }
   }
@@ -144,17 +172,67 @@ function playCard(gameState, playerIndex, cardIndex, chosenColor, players) {
 }
 
 function drawCard(gameState, playerIndex, players) {
+  const playerId = players[playerIndex].id;
+  const count = players.length;
+
+  // Mercy mode: absorb the full accumulated draw stack
+  if (gameState.unoMode === 'mercy' && gameState.drawStack > 0) {
+    const total = gameState.drawStack;
+    for (let i = 0; i < total; i++) {
+      if (gameState.deck.length === 0) reshuffleDeck(gameState);
+      if (gameState.deck.length === 0) break;
+      gameState.hands[playerId].push(gameState.deck.pop());
+    }
+    gameState.drawStack = 0;
+    gameState.pendingDrawType = null;
+    // Drawing while stacked skips the drawing player's turn
+    gameState.currentPlayerIndex = getNextIndex(count, playerIndex, gameState.direction, true);
+    return { drawn: true, absorbed: total };
+  }
+
   if (gameState.deck.length === 0) reshuffleDeck(gameState);
   if (gameState.deck.length === 0) return { error: 'Deck is empty' };
 
-  const playerId = players[playerIndex].id;
   const card = gameState.deck.pop();
   gameState.hands[playerId].push(card);
 
-  const count = players.length;
   gameState.currentPlayerIndex = getNextIndex(count, playerIndex, gameState.direction);
 
   return { card, drawn: true };
 }
 
-module.exports = { createGameState, canPlay, playCard, drawCard };
+// Mercy vote: any player can nominate a player with 15+ cards to be reduced to 7
+function mercyVote(gameState, voterId, targetPlayerId, players) {
+  if (gameState.unoMode !== 'mercy') return { error: 'Not in mercy mode' };
+  if (voterId === targetPlayerId) return { error: 'Cannot vote for yourself' };
+
+  const targetHand = gameState.hands[targetPlayerId];
+  if (!targetHand || targetHand.length < 15) {
+    return { error: 'Player does not have enough cards for mercy (need 15+)' };
+  }
+
+  // Only one active vote target at a time; reset votes if target changed
+  if (gameState.mercyVoteTarget && gameState.mercyVoteTarget !== targetPlayerId) {
+    gameState.mercyVotes = {};
+  }
+  gameState.mercyVoteTarget = targetPlayerId;
+  gameState.mercyVotes[voterId] = targetPlayerId;
+
+  // Threshold: majority of non-target players must vote
+  const eligibleVoters = players.filter(p => p.id !== targetPlayerId);
+  const threshold = Math.ceil(eligibleVoters.length / 2);
+  const voteCount = Object.values(gameState.mercyVotes).filter(v => v === targetPlayerId).length;
+
+  if (voteCount >= threshold) {
+    // Mercy granted: discard down to 7
+    const removed = targetHand.length - 7;
+    gameState.hands[targetPlayerId] = targetHand.slice(0, 7);
+    gameState.mercyVotes = {};
+    gameState.mercyVoteTarget = null;
+    return { passed: true, removed };
+  }
+
+  return { passed: false, votes: voteCount, threshold };
+}
+
+module.exports = { createGameState, canPlay, playCard, drawCard, mercyVote };
