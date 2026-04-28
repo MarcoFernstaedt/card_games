@@ -97,14 +97,22 @@ class Bot {
     this.socket.on('room_joined', (p) => { this.id = p.playerId || this.pid; this.code = p.code || this.code; this.hasJoinedRoom = true; });
     this.socket.on('room_created', (p) => { this.id = p.playerId || this.pid; this.code = p.code || this.code; this.hasJoinedRoom = true; });
     this.socket.on('hand_update', (p) => { this.hand = p.hand || []; this.act(); });
-    this.socket.on('game_state', (s) => { this.state = s; this.act(); });
+    this.socket.on('game_state', (s) => {
+      this.state = s;
+      if ((s?.phase === 'finished' || s?.winner) && this.hasJoinedRoom) this.close();
+      else this.act();
+    });
     this.socket.on('action_state', (s) => { this.state = { ...(this.state || {}), ...s, gameType: 'action', actionMode: s.mode }; this.act(); });
     this.socket.on('action_role', (p) => { this.role = p.role; });
-    this.socket.on('error', () => { this.lastActionKey = ''; this.lastActionAt = 0; });
+    this.socket.on('error', (payload) => {
+      this.lastActionKey = '';
+      this.lastActionAt = 0;
+      if (/room not found|player not found|game already started/i.test(payload?.message || '')) this.close();
+    });
     this.socket.on('connect', () => { if (this.hasJoinedRoom && this.code && this.id) this.socket.emit('rejoin_room', { code: this.code, pid: this.id }); });
   }
   async connect() { await once(this.socket, 'connect'); }
-  close() { this.stopped = true; this.socket.close(); }
+  close() { if (this.stopped) return; this.stopped = true; this.socket.removeAllListeners(); this.socket.close(); }
   act() {
     if (this.stopped || !this.state || !this.code) return;
     if (this.state.phase === 'finished' || this.state.winner) return;
@@ -276,17 +284,26 @@ async function joinUnoRoomBots() {
     });
   });
   await Promise.all(joinedBots.map((joined) => joined));
+  const shutdown = (reason = 'done') => {
+    for (const bot of bots) bot.close();
+    console.log('JOINED_BOTS_EXIT', JSON.stringify({ code, reason }));
+    setTimeout(() => process.exit(0), 50).unref?.();
+  };
   for (const bot of bots) {
-    bot.socket.on('game_over', payload => console.log('GAME_OVER', JSON.stringify({ name: bot.name, payload })));
+    bot.socket.on('game_over', payload => { console.log('GAME_OVER', JSON.stringify({ name: bot.name, payload })); shutdown('game_over'); });
+    bot.socket.on('game_state', state => { if (state?.phase === 'finished' || state?.winner) shutdown('finished_state'); });
     bot.socket.on('player_disconnected', payload => console.log('PLAYER_DISCONNECTED', JSON.stringify({ name: bot.name, payload })));
     bot.socket.on('player_rejoined', payload => console.log('PLAYER_REJOINED', JSON.stringify({ name: bot.name, payload })));
   }
   console.log('JOINED_BOTS_READY', JSON.stringify({ code, count, names: bots.map((bot) => bot.name), url }));
+  const idleExitMs = Number(process.env.BOT_IDLE_EXIT_MS || 10 * 60 * 1000);
+  const idleTimer = setTimeout(() => shutdown('idle_timeout'), idleExitMs);
+  idleTimer.unref?.();
   setInterval(() => {
-    for (const bot of bots) {
-      if (!bot.stopped && bot.socket.connected) console.log('BOT_STILL_CONNECTED', JSON.stringify({ code: bot.code, name: bot.name, actions: bot.actions }));
-    }
-  }, 30000);
+    const live = bots.filter((bot) => !bot.stopped && bot.socket.connected);
+    for (const bot of live) console.log('BOT_STILL_CONNECTED', JSON.stringify({ code: bot.code, name: bot.name, actions: bot.actions }));
+    if (!live.length) shutdown('all_bots_disconnected');
+  }, 30000).unref?.();
 }
 (async () => {
   const cmd = process.argv[2] || 'suite';

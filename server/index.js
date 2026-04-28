@@ -18,8 +18,74 @@ const io = new Server(server, {
 
 const rooms = {};
 const reconnectTimers = {};
+const roomCleanupTimers = {};
 const RECONNECT_GRACE_MS = Number(process.env.RECONNECT_GRACE_MS || 30000);
 const ACTIVE_GAME_RECONNECT_GRACE_MS = Number(process.env.ACTIVE_GAME_RECONNECT_GRACE_MS || 300000);
+const FINISHED_ROOM_TTL_MS = Number(process.env.FINISHED_ROOM_TTL_MS || 60000);
+const EMPTY_ROOM_TTL_MS = Number(process.env.EMPTY_ROOM_TTL_MS || 10000);
+const STALE_ROOM_TTL_MS = Number(process.env.STALE_ROOM_TTL_MS || 60 * 60 * 1000);
+
+function clearRoomTimers(code) {
+  if (roomCleanupTimers[code]) {
+    clearTimeout(roomCleanupTimers[code]);
+    delete roomCleanupTimers[code];
+  }
+  for (const key of Object.keys(reconnectTimers)) {
+    if (key.startsWith(`${code}-`)) {
+      clearTimeout(reconnectTimers[key]);
+      delete reconnectTimers[key];
+    }
+  }
+  if (typeof monopolyTimers !== 'undefined' && monopolyTimers[code]) {
+    clearInterval(monopolyTimers[code]);
+    delete monopolyTimers[code];
+  }
+  if (typeof actionLoops !== 'undefined' && actionLoops[code]) {
+    clearInterval(actionLoops[code]);
+    delete actionLoops[code];
+  }
+}
+
+function destroyRoom(code, reason = 'cleanup') {
+  const room = rooms[code];
+  if (!room) return false;
+  clearRoomTimers(code);
+  delete rooms[code];
+  recordActivity('room_cleaned_up', { ...roomActivityDetails(room), reason });
+  return true;
+}
+
+function scheduleRoomCleanup(code, ttlMs, reason) {
+  if (roomCleanupTimers[code]) clearTimeout(roomCleanupTimers[code]);
+  roomCleanupTimers[code] = setTimeout(() => destroyRoom(code, reason), Math.max(0, ttlMs));
+}
+
+function markRoomActivity(room) {
+  if (room) room.updatedAt = Date.now();
+}
+
+function finishRoom(code, payload = {}, reason = 'finished') {
+  const room = rooms[code];
+  if (!room) return;
+  room.finishedAt = Date.now();
+  if (room.gameState && !room.gameState.winner && payload.winner) room.gameState.winner = payload.winner;
+  if (room.gameState && room.gameState.phase && room.gameState.phase !== 'finished') room.gameState.phase = 'finished';
+  io.to(code).emit('game_state', getPublicState(room));
+  io.to(code).emit('game_over', { ...payload, reason });
+  scheduleRoomCleanup(code, FINISHED_ROOM_TTL_MS, reason);
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [code, room] of Object.entries(rooms)) {
+    if (!room.players.length) {
+      scheduleRoomCleanup(code, EMPTY_ROOM_TTL_MS, 'empty_room');
+      continue;
+    }
+    if (room.finishedAt && now - room.finishedAt > FINISHED_ROOM_TTL_MS) destroyRoom(code, 'finished_room_ttl');
+    if ((room.updatedAt || room.createdAt || now) + STALE_ROOM_TTL_MS < now) destroyRoom(code, 'stale_room_ttl');
+  }
+}, Math.min(60000, Math.max(5000, STALE_ROOM_TTL_MS))).unref?.();
 
 function generateCode() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -175,11 +241,10 @@ function removePlayer(room, code, player) {
   room.players.splice(idx, 1);
 
   if (room.players.length === 0) {
-    delete rooms[code];
-    if (monopolyTimers[code]) { clearInterval(monopolyTimers[code]); delete monopolyTimers[code]; }
-    if (actionLoops[code]) { clearInterval(actionLoops[code]); delete actionLoops[code]; }
+    destroyRoom(code, 'all_players_left');
     return;
   }
+  markRoomActivity(room);
   if (room.host === leavingId) room.host = room.players[0].id;
 
   if (room.gameState) {
@@ -207,12 +272,11 @@ function removePlayer(room, code, player) {
 
     if (room.players.length < 2) {
       io.to(code).emit('player_left', { playerId: leavingId, playerName });
-      io.to(code).emit('game_over', {
+      finishRoom(code, {
         message: 'Not enough players',
         scores: gs.scores || {},
         winnerName: null,
-      });
-      room.gameState = null;
+      }, 'not_enough_players');
       return;
     }
   }
@@ -247,7 +311,7 @@ function startMonopolyTimer(code, room) {
       r.gameState.phase = 'finished';
       const winnerName = r.players.find(p => p.id === bestId)?.name;
       io.to(code).emit('game_state', getPublicState(r));
-      io.to(code).emit('game_over', { winner: bestId, winnerName, reason: 'time_limit' });
+      finishRoom(code, { winner: bestId, winnerName }, 'time_limit');
     }
   }, 1000);
 }
@@ -310,6 +374,9 @@ io.on('connection', socket => {
       players: [{ id: playerId, name, socketId: socket.id, disconnected: false }],
       gameState: null,
       musicState: { playing: false, track: 'hype', startedAt: null },
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      finishedAt: null,
     };
     socket.join(code);
     recordActivity('room_created', roomActivityDetails(rooms[code]));
@@ -326,6 +393,7 @@ io.on('connection', socket => {
 
     const playerId = pid || socket.id;
     room.players.push({ id: playerId, name, socketId: socket.id, disconnected: false });
+    markRoomActivity(room);
     socket.join(code.toUpperCase());
     recordActivity('room_joined', roomActivityDetails(room));
     socket.emit('room_joined', { code: code.toUpperCase(), playerId });
@@ -347,6 +415,7 @@ io.on('connection', socket => {
 
     player.socketId = socket.id;
     player.disconnected = false;
+    markRoomActivity(room);
     socket.join(code.toUpperCase());
     recordActivity('player_rejoined', roomActivityDetails(room));
 
@@ -448,6 +517,7 @@ io.on('connection', socket => {
       room.gameState = createCahState(room.players, { maxRounds: process.env.CAH_MAX_ROUNDS });
     }
 
+    markRoomActivity(room);
     recordActivity('game_started', roomActivityDetails(room));
 
     sendHands(room);
@@ -473,7 +543,7 @@ io.on('connection', socket => {
 
     if (result.winner) {
       const winnerName = room.players.find(p => p.id === result.winner)?.name;
-      io.to(code).emit('game_over', { winner: result.winner, winnerName });
+      finishRoom(code, { winner: result.winner, winnerName }, 'winner');
     }
   });
 
@@ -495,7 +565,7 @@ io.on('connection', socket => {
     io.to(code).emit('game_state', getPublicState(room));
     if (result.winner) {
       const winnerName = room.players.find(p => p.id === result.winner)?.name;
-      io.to(code).emit('game_over', { winner: result.winner, winnerName });
+      finishRoom(code, { winner: result.winner, winnerName }, 'winner');
     }
   });
 
@@ -534,7 +604,7 @@ io.on('connection', socket => {
 
     const result = nextRound(room.gameState, room.players);
     if (result.gameOver) {
-      io.to(code).emit('game_over', { scores: room.gameState.scores });
+      finishRoom(code, { scores: room.gameState.scores }, 'cah_complete');
       return;
     }
 
@@ -602,7 +672,7 @@ io.on('connection', socket => {
 
     if (room.gameState.winner) {
       const winnerName = room.players.find(p => p.id === room.gameState.winner)?.name;
-      io.to(code).emit('game_over', { winner: room.gameState.winner, winnerName });
+      finishRoom(code, { winner: room.gameState.winner, winnerName }, 'winner');
     }
   });
 
@@ -652,6 +722,7 @@ io.on('connection', socket => {
       if (!player) continue;
 
       player.disconnected = true;
+      markRoomActivity(room);
       recordActivity('player_disconnected', roomActivityDetails(room));
       io.to(code).emit('player_disconnected', { playerName: player.name });
       io.to(code).emit('game_state', getPublicState(room));
